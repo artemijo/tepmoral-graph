@@ -98,8 +98,13 @@ export class GraphDB {
     // Create vector table if extension is loaded
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS vec_nodes USING vec0(
-        node_id TEXT PRIMARY KEY,
-        embedding FLOAT[384]
+        embedding float[384]
+      );
+      
+      -- Separate mapping table for IDs
+      CREATE TABLE IF NOT EXISTS vec_nodes_map (
+        rowid INTEGER PRIMARY KEY,
+        node_id TEXT UNIQUE NOT NULL
       );
     `);
   }
@@ -123,14 +128,43 @@ export class GraphDB {
     if (this.vecTableInitialized) {
       try {
         const embedding = await this.embeddingGen.generateEmbedding(content);
-        const vecStmt = this.db.prepare(`
-          INSERT OR REPLACE INTO vec_nodes (node_id, embedding)
-          VALUES (?, ?)
-        `);
         
-        // Convert Float32Array to buffer for sqlite-vec
-        const buffer = Buffer.from(embedding.buffer);
-        vecStmt.run(id, buffer);
+        // Check if mapping already exists
+        const existingRow = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?').get(id) as any;
+        
+        if (existingRow) {
+          // Update existing embedding by deleting and re-inserting
+          const deleteStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
+          deleteStmt.run(existingRow.rowid);
+          
+          // Insert new vector (let sqlite-vec assign the rowid)
+          const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
+          
+          // Convert Float32Array to JSON array for vec_f32()
+          const embeddingArray = Array.from(embedding);
+          const embeddingBlob = JSON.stringify(embeddingArray);
+          
+          const insertResult = vecStmt.run(embeddingBlob);
+          
+          // Update mapping table with new rowid
+          const updateMapStmt = this.db.prepare('UPDATE vec_nodes_map SET rowid = ? WHERE node_id = ?');
+          updateMapStmt.run(insertResult.lastInsertRowid, id);
+        } else {
+          // Insert new vector first (let sqlite-vec assign the rowid)
+          const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
+          
+          // Convert Float32Array to JSON array for vec_f32()
+          const embeddingArray = Array.from(embedding);
+          const embeddingBlob = JSON.stringify(embeddingArray);
+          
+          const insertResult = vecStmt.run(embeddingBlob);
+          
+          // Then insert mapping with the assigned rowid
+          const mapStmt = this.db.prepare(`
+            INSERT INTO vec_nodes_map (rowid, node_id) VALUES (?, ?)
+          `);
+          mapStmt.run(insertResult.lastInsertRowid, id);
+        }
       } catch (error) {
         console.error('Error generating embedding:', error);
       }
@@ -177,10 +211,21 @@ export class GraphDB {
   }
 
   deleteNode(id: string): boolean {
-    // Also delete from vec_nodes if exists
+    // Also delete from vec_nodes and vec_nodes_map if exists
     if (this.vecTableInitialized) {
-      const vecStmt = this.db.prepare('DELETE FROM vec_nodes WHERE node_id = ?');
-      vecStmt.run(id);
+      // Get the rowid from mapping table first
+      const getRowidStmt = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?');
+      const rowidRow = getRowidStmt.get(id) as any;
+      
+      if (rowidRow) {
+        // Delete from vec_nodes using rowid
+        const vecStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
+        vecStmt.run(rowidRow.rowid);
+        
+        // Delete from mapping table
+        const mapStmt = this.db.prepare('DELETE FROM vec_nodes_map WHERE node_id = ?');
+        mapStmt.run(id);
+      }
     }
 
     const stmt = this.db.prepare('DELETE FROM nodes WHERE id = ?');
@@ -305,24 +350,36 @@ export class GraphDB {
       throw new Error('Vector search not available. sqlite-vec extension not loaded.');
     }
 
-    // Get the node's embedding
-    const getEmbedStmt = this.db.prepare('SELECT embedding FROM vec_nodes WHERE node_id = ?');
-    const embeddingRow = getEmbedStmt.get(id) as any;
+    // Get the node's embedding using the mapping
+    const getRowidStmt = this.db.prepare(
+      'SELECT rowid FROM vec_nodes_map WHERE node_id = ?'
+    );
+    const rowidRow = getRowidStmt.get(id) as any;
+    
+    if (!rowidRow) {
+      throw new Error(`No embedding found for node: ${id}`);
+    }
+
+    const getEmbedStmt = this.db.prepare(
+      'SELECT embedding FROM vec_nodes WHERE rowid = ?'
+    );
+    const embeddingRow = getEmbedStmt.get(rowidRow.rowid) as any;
     
     if (!embeddingRow) {
       throw new Error(`No embedding found for node: ${id}`);
     }
 
-    // Search for similar vectors
+    // Search for similar vectors using proper distance calculation
     const stmt = this.db.prepare(`
-      SELECT 
-        vn.node_id as id,
+      SELECT
+        m.node_id as id,
         n.content,
         n.metadata,
-        vec_distance_cosine(vn.embedding, ?) as distance
+        vec_distance_cosine(?, vn.embedding) as distance
       FROM vec_nodes vn
-      JOIN nodes n ON vn.node_id = n.id
-      WHERE vn.node_id != ?
+      JOIN vec_nodes_map m ON vn.rowid = m.rowid
+      JOIN nodes n ON m.node_id = n.id
+      WHERE m.node_id != ?
       ORDER BY distance
       LIMIT ?
     `);
