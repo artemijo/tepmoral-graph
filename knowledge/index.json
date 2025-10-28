@@ -1,0 +1,396 @@
+{
+  "metadata": {
+    "lastUpdated": "2025-10-28T08:37:21.517Z",
+    "totalDocuments": 3,
+    "version": "1.0"
+  },
+  "categories": {
+    "противоречие": {
+      "count": 1,
+      "documents": [
+        "thinking_triz"
+      ]
+    },
+    "икр": {
+      "count": 1,
+      "documents": [
+        "thinking_triz"
+      ]
+    },
+    "триз": {
+      "count": 1,
+      "documents": [
+        "thinking_triz"
+      ]
+    },
+    "инновация": {
+      "count": 1,
+      "documents": [
+        "thinking_triz"
+      ]
+    },
+    "изобретательство": {
+      "count": 1,
+      "documents": [
+        "thinking_triz"
+      ]
+    },
+    "система": {
+      "count": 1,
+      "documents": [
+        "thinking_systems"
+      ]
+    },
+    "взаимодействие": {
+      "count": 1,
+      "documents": [
+        "thinking_systems"
+      ]
+    },
+    "эмерджентность": {
+      "count": 1,
+      "documents": [
+        "thinking_systems"
+      ]
+    },
+    "обратная связь": {
+      "count": 1,
+      "documents": [
+        "thinking_systems"
+      ]
+    },
+    "фундаментальные принципы": {
+      "count": 1,
+      "documents": [
+        "thinking_first_principles"
+      ]
+    },
+    "декомпозиция": {
+      "count": 1,
+      "documents": [
+        "thinking_first_principles"
+      ]
+    },
+    "анализ": {
+      "count": 1,
+      "documents": [
+        "thinking_first_principles"
+      ]
+    },
+    "логика": {
+      "count": 1,
+      "documents": [
+        "thinking_first_principles"
+      ]
+    }
+  },
+  "tags": {
+    "противоречие": 1,
+    "икр": 1,
+    "триз": 1,
+    "инновация": 1,
+    "изобретательство": 1,
+    "система": 1,
+    "взаимодействие": 1,
+    "эмерджентность": 1,
+    "обратная связь": 1,
+    "фундаментальные принципы": 1,
+    "декомпозиция": 1,
+    "анализ": 1,
+    "логика": 1
+  },
+  "searchIndex": {
+    "triz": {
+      "documents": [
+        "thinking_triz",
+        "thinking_triz"
+      ],
+      "frequency": 2
+    },
+    "theory": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "inventive": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "problem": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "solving": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "provides": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "systematic": {
+      "documents": [
+        "thinking_triz",
+        "thinking_triz"
+      ],
+      "frequency": 2
+    },
+    "methods": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "resolving": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "contradictions": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "achieving": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "ideal": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "final": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "results": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "innovation": {
+      "documents": [
+        "thinking_triz"
+      ],
+      "frequency": 1
+    },
+    "thinking": {
+      "documents": [
+        "thinking_triz",
+        "thinking_systems",
+        "thinking_systems",
+        "thinking_first_principles",
+        "thinking_first_principles"
+      ],
+      "frequency": 5
+    },
+    "systems": {
+      "documents": [
+        "thinking_systems",
+        "thinking_systems",
+        "thinking_systems"
+      ],
+      "frequency": 3
+    },
+    "focuses": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "understanding": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "components": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "interact": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "within": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "whole": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "system": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "influence": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "each": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "other": {
+      "documents": [
+        "thinking_systems"
+      ],
+      "frequency": 1
+    },
+    "first": {
+      "documents": [
+        "thinking_first_principles",
+        "thinking_first_principles"
+      ],
+      "frequency": 2
+    },
+    "principles": {
+      "documents": [
+        "thinking_first_principles",
+        "thinking_first_principles"
+      ],
+      "frequency": 2
+    },
+    "involves": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "breaking": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "down": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "complex": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "problems": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "into": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "fundamental": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "truths": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "reasoning": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "from": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    },
+    "there": {
+      "documents": [
+        "thinking_first_principles"
+      ],
+      "frequency": 1
+    }
+  },
+  "documents": [
+    {
+      "tag": "thinking_triz",
+      "title": "TRIZ: Systematic Innovation Thinking",
+      "topics": [
+        "противоречие",
+        "икр",
+        "триз",
+        "инновация",
+        "изобретательство"
+      ],
+      "path": "knowledge/противоречие/thinking_triz.md",
+      "lastModified": "2025-10-28T08:37:21.517Z",
+      "size": 134
+    },
+    {
+      "tag": "thinking_systems",
+      "title": "Systems Thinking",
+      "topics": [
+        "система",
+        "взаимодействие",
+        "эмерджентность",
+        "обратная связь"
+      ],
+      "path": "knowledge/система/thinking_systems.md",
+      "lastModified": "2025-10-28T08:37:21.517Z",
+      "size": 125
+    },
+    {
+      "tag": "thinking_first_principles",
+      "title": "First Principles Thinking",
+      "topics": [
+        "фундаментальные принципы",
+        "декомпозиция",
+        "анализ",
+        "логика"
+      ],
+      "path": "knowledge/фундаментальные принципы/thinking_first_principles.md",
+      "lastModified": "2025-10-28T08:37:21.517Z",
+      "size": 118
+    }
+  ]
+}
