@@ -38,6 +38,9 @@ CREATE INDEX IF NOT EXISTS idx_edges_created_at ON edges(created_at DESC);
 **Goal:** Add time-awareness to the graph  
 **Estimated Time:** 2-3 weeks  
 **Priority:** HIGHEST 🔥
+### 1.0 Tag system 
+
+#### Think about adding the tag system to maske graph oriantation faster and easier
 
 ### 1.1 Extend Schema with Temporal Fields
 ```sql
