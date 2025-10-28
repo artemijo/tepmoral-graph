@@ -26,6 +26,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 
+-- Temporal indexes (for Phase 1+)
+CREATE INDEX IF NOT EXISTS idx_nodes_created_at ON nodes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
+CREATE INDEX IF NOT EXISTS idx_edges_created_at ON edges(created_at DESC);
+
+-- Metadata queries (optional but useful)
+CREATE INDEX IF NOT EXISTS idx_edges_relation_weight ON edges(relation, weight);
+
 -- Полнотекстовый поиск
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
     id UNINDEXED,

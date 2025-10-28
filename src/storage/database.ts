@@ -42,6 +42,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 
+-- Temporal indexes (for Phase 1+)
+CREATE INDEX IF NOT EXISTS idx_nodes_created_at ON nodes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
+CREATE INDEX IF NOT EXISTS idx_edges_created_at ON edges(created_at DESC);
+
+-- Metadata queries (optional but useful)
+CREATE INDEX IF NOT EXISTS idx_edges_relation_weight ON edges(relation, weight);
+
 -- Полнотекстовый поиск
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
     id UNINDEXED,
@@ -92,6 +100,10 @@ export class GraphDB {
       console.warn('Install from: https://github.com/asg017/sqlite-vec');
       this.vecTableInitialized = false;
     }
+  }
+
+  private transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   private initVectorTable(): void {
@@ -211,65 +223,69 @@ export class GraphDB {
   }
 
   deleteNode(id: string): boolean {
-    // Also delete from vec_nodes and vec_nodes_map if exists
-    if (this.vecTableInitialized) {
-      // Get the rowid from mapping table first
-      const getRowidStmt = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?');
-      const rowidRow = getRowidStmt.get(id) as any;
-      
-      if (rowidRow) {
-        // Delete from vec_nodes using rowid
-        const vecStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
-        vecStmt.run(rowidRow.rowid);
+    return this.transaction(() => {
+      // Also delete from vec_nodes and vec_nodes_map if exists
+      if (this.vecTableInitialized) {
+        // Get the rowid from mapping table first
+        const getRowidStmt = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?');
+        const rowidRow = getRowidStmt.get(id) as any;
         
-        // Delete from mapping table
-        const mapStmt = this.db.prepare('DELETE FROM vec_nodes_map WHERE node_id = ?');
-        mapStmt.run(id);
+        if (rowidRow) {
+          // Delete from vec_nodes using rowid
+          const vecStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
+          vecStmt.run(rowidRow.rowid);
+          
+          // Delete from mapping table
+          const mapStmt = this.db.prepare('DELETE FROM vec_nodes_map WHERE node_id = ?');
+          mapStmt.run(id);
+        }
       }
-    }
 
-    const stmt = this.db.prepare('DELETE FROM nodes WHERE id = ?');
-    const result = stmt.run(id);
-    return result.changes > 0;
+      const stmt = this.db.prepare('DELETE FROM nodes WHERE id = ?');
+      const result = stmt.run(id);
+      return result.changes > 0;
+    });
   }
 
   addEdge(input: AddEdgeInput): Edge {
     const { from, to, relation = 'related', weight = 1.0, metadata } = input;
 
-    // Проверяем существование обоих документов
-    const fromExists = this.getNode(from);
-    const toExists = this.getNode(to);
-    
-    if (!fromExists) {
-      throw new Error(`Source document not found: ${from}`);
-    }
-    
-    if (!toExists) {
-      throw new Error(`Target document not found: ${to}`);
-    }
+    return this.transaction(() => {
+      // Проверяем существование обоих документов
+      const fromExists = this.getNode(from);
+      const toExists = this.getNode(to);
+      
+      if (!fromExists) {
+        throw new Error(`Source document not found: ${from}`);
+      }
+      
+      if (!toExists) {
+        throw new Error(`Target document not found: ${to}`);
+      }
 
-    const stmt = this.db.prepare(`
-      INSERT INTO edges (from_node, to_node, relation, weight, metadata)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(from_node, to_node) DO UPDATE SET
-        relation = excluded.relation,
-        weight = excluded.weight,
-        metadata = excluded.metadata
-    `);
+      const stmt = this.db.prepare(`
+        INSERT INTO edges (from_node, to_node, relation, weight, metadata)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(from_node, to_node) DO UPDATE SET
+          relation = excluded.relation,
+          weight = excluded.weight,
+          metadata = excluded.metadata
+      `);
 
-    try {
-      stmt.run(from, to, relation, weight, metadata ? JSON.stringify(metadata) : null);
-    } catch (error) {
-      throw new Error(`Failed to create relationship: ${error instanceof Error ? error.message : String(error)}`);
-    }
+      try {
+        stmt.run(from, to, relation, weight, metadata ? JSON.stringify(metadata) : null);
+      } catch (error) {
+        throw new Error(`Failed to create relationship: ${error instanceof Error ? error.message : String(error)}`);
+      }
 
-    return {
-      from_node: from,
-      to_node: to,
-      relation,
-      weight,
-      metadata,
-    };
+      return {
+        from_node: from,
+        to_node: to,
+        relation,
+        weight,
+        metadata,
+      };
+    });
   }
 
   getNeighbors(id: string, direction: Direction = 'both'): NeighborResult[] {
