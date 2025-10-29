@@ -14,6 +14,7 @@ import type {
   RichMetadata,
   SearchOptions,
   TagOperation,
+  TimelineEntry,
 } from '../types/index.js';
 
 const SCHEMA_SQL = `
@@ -1435,6 +1436,666 @@ export class GraphDB {
     }
     
     throw new Error('Must specify either document_id or document_filter');
+  }
+
+  // ==================== GRAPH EXPLORATION (Part 2A) ====================
+
+  /**
+   * Explore graph from starting point using BFS
+   */
+  exploreGraph(options: {
+    start: string;
+    strategy: 'breadth' | 'depth' | 'relationship';
+    max_depth?: number;
+    max_nodes?: number;
+    follow_relations?: string[];
+    filters?: {
+      tags?: string[];
+      type?: string;
+    };
+    at_time?: string;
+  }): {
+    root: string;
+    strategy: string;
+    nodes: Array<Node & { depth: number }>;
+    edges: Edge[];
+    stats: {
+      total_nodes: number;
+      max_depth_reached: number;
+      truncated: boolean;
+    };
+  } {
+    const {
+      start,
+      strategy,
+      max_depth = 3,
+      max_nodes = 50,
+      follow_relations,
+      filters,
+      at_time
+    } = options;
+    
+    const nodes: Array<Node & { depth: number }> = [];
+    const edges: Edge[] = [];
+    const visited = new Set<string>();
+    
+    // Get starting node
+    const startNode = at_time
+      ? this.getNodeAtTime(start, at_time)
+      : this.getNodeCurrent(start);
+    
+    if (!startNode) {
+      throw new Error(`Start node not found: ${start}`);
+    }
+    
+    // Check if start node matches filters
+    if (filters) {
+      if (filters.tags && startNode.metadata?.tags) {
+        const hasAllTags = filters.tags.every(tag =>
+          startNode.metadata!.tags!.includes(tag)
+        );
+        if (!hasAllTags) {
+          throw new Error(`Start node "${start}" does not match tag filters`);
+        }
+      }
+      
+      if (filters.type && startNode.metadata?.type !== filters.type) {
+        throw new Error(`Start node "${start}" does not match type filter`);
+      }
+    }
+    
+    nodes.push({ ...startNode, depth: 0 });
+    visited.add(start);
+    
+    if (strategy === 'breadth') {
+      // BFS implementation
+      const queue: Array<{ id: string; depth: number }> = [{ id: start, depth: 0 }];
+      
+      while (queue.length > 0 && nodes.length < max_nodes) {
+        const current = queue.shift()!;
+        
+        if (current.depth >= max_depth) continue;
+        
+        // Get neighbors
+        const neighbors = this.getNeighbors(current.id, 'both', {
+          depth: 1,
+          relation_filter: follow_relations,
+          at_time
+        });
+        
+        for (const neighbor of neighbors) {
+          if (visited.has(neighbor.id)) continue;
+          
+          // Get the node
+          const node = at_time
+            ? this.getNodeAtTime(neighbor.id, at_time)
+            : this.getNodeCurrent(neighbor.id);
+          
+          if (!node) continue;
+          
+          // Apply filters
+          if (filters) {
+            if (filters.tags && node.metadata?.tags) {
+              const hasAllTags = filters.tags.every(tag =>
+                node.metadata!.tags!.includes(tag)
+              );
+              if (!hasAllTags) continue;
+            }
+            
+            if (filters.type && node.metadata?.type !== filters.type) {
+              continue;
+            }
+          }
+          
+          visited.add(neighbor.id);
+          nodes.push({ ...node, depth: current.depth + 1 });
+          queue.push({ id: neighbor.id, depth: current.depth + 1 });
+          
+          // Record edge
+          edges.push({
+            from_node: neighbor.direction === 'incoming' ? neighbor.id : current.id,
+            to_node: neighbor.direction === 'incoming' ? current.id : neighbor.id,
+            relation: neighbor.relation
+          });
+          
+          if (nodes.length >= max_nodes) break;
+        }
+      }
+    } else if (strategy === 'depth') {
+      // DFS not yet implemented
+      console.log('⚠️  DFS not yet implemented, using BFS');
+      return this.exploreGraph({ ...options, strategy: 'breadth' });
+    } else {
+      // Relationship strategy not yet implemented
+      console.log('⚠️  Relationship strategy not yet implemented, using BFS');
+      return this.exploreGraph({ ...options, strategy: 'breadth' });
+    }
+    
+    const maxDepthReached = nodes.length > 0
+      ? Math.max(...nodes.map(n => n.depth))
+      : 0;
+    
+    return {
+      root: start,
+      strategy,
+      nodes,
+      edges,
+      stats: {
+        total_nodes: nodes.length,
+        max_depth_reached: maxDepthReached,
+        truncated: nodes.length >= max_nodes
+      }
+    };
+  }
+
+  // ==================== GRAPH MAPPING (Part 2A) ====================
+
+  /**
+   * Generate comprehensive graph map
+   */
+  mapGraph(options: {
+    scope: 'all' | 'filtered' | 'subgraph' | 'temporal_slice';
+    filters?: {
+      tags?: string[];
+      path_prefix?: string[];
+      created_after?: string;
+      type?: string;
+    };
+    focus_nodes?: string[];
+    radius?: number;
+    at_time?: string;
+    max_nodes?: number;
+    max_edges?: number;
+    include_metadata?: boolean;
+    include_content_preview?: boolean;
+    include_stats?: boolean;
+    format?: 'json' | 'mermaid';
+  }): any {
+    const {
+      scope,
+      filters,
+      focus_nodes,
+      radius = 2,
+      at_time,
+      max_nodes = 100,
+      max_edges = 500,
+      include_metadata = true,
+      include_content_preview = true,
+      include_stats = true,
+      format = 'json'
+    } = options;
+    
+    let nodes: Node[] = [];
+    let edges: Edge[] = [];
+    
+    // ==================== GET NODES BASED ON SCOPE ====================
+    
+    if (scope === 'all') {
+      if (at_time) {
+        // Get nodes valid at the specified time
+        const nodeStmt = this.db.prepare(`
+          SELECT * FROM nodes
+          WHERE valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)
+          ORDER BY created_at DESC
+          LIMIT ?
+        `);
+        const nodeRows = nodeStmt.all(at_time, at_time, max_nodes) as any[];
+        nodes = nodeRows.map(row => this.rowToNode(row)!);
+      } else {
+        nodes = this.listNodes(max_nodes);
+      }
+        
+    } else if (scope === 'filtered') {
+      nodes = this.searchDocuments({
+        query: undefined,
+        filters,
+        limit: max_nodes
+      });
+      
+    } else if (scope === 'subgraph' && focus_nodes) {
+      const visited = new Set<string>();
+      
+      for (const focusId of focus_nodes) {
+        try {
+          const explored = this.exploreGraph({
+            start: focusId,
+            strategy: 'breadth',
+            max_depth: radius,
+            max_nodes: max_nodes - visited.size,
+            at_time
+          });
+          
+          for (const node of explored.nodes) {
+            if (!visited.has(node.id)) {
+              visited.add(node.id);
+              nodes.push(node);
+            }
+          }
+        } catch (e) {
+          console.warn(`Could not explore from ${focusId}:`, e);
+        }
+      }
+      
+    } else if (scope === 'temporal_slice' && at_time) {
+      const snapshot = this.getGraphSnapshot(at_time);
+      nodes = snapshot.nodes.slice(0, max_nodes);
+      edges = snapshot.edges.slice(0, max_edges);
+    }
+    
+    // ==================== GET EDGES BETWEEN NODES ====================
+    
+    if (edges.length === 0 && nodes.length > 0) {
+      const nodeIds = new Set(nodes.map(n => n.id));
+      const nodeIdArray = Array.from(nodeIds);
+      
+      if (nodeIdArray.length > 0) {
+        const placeholders = nodeIdArray.map(() => '?').join(',');
+        
+        let sql = `
+          SELECT * FROM edges
+          WHERE from_node IN (${placeholders})
+            AND to_node IN (${placeholders})
+        `;
+        
+        const params = [...nodeIdArray, ...nodeIdArray];
+        
+        if (at_time) {
+          sql += ` AND valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)`;
+          params.push(at_time, at_time);
+        } else {
+          sql += ` AND valid_until IS NULL`;
+        }
+        
+        sql += ` LIMIT ?`;
+        params.push(String(max_edges));
+        
+        const edgeStmt = this.db.prepare(sql);
+        const edgeRows = edgeStmt.all(...params) as any[];
+        
+        edges = edgeRows.map(row => ({
+          from_node: row.from_node,
+          to_node: row.to_node,
+          relation: row.relation,
+          weight: row.weight,
+          metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+          valid_from: row.valid_from,
+          valid_until: row.valid_until
+        }));
+      }
+    }
+    
+    // ==================== GENERATE OUTPUT ====================
+    
+    if (format === 'mermaid') {
+      return this.generateMermaidDiagram(nodes, edges, {
+        include_metadata,
+        include_content_preview
+      });
+    } else {
+      // JSON format
+      const result: any = {
+        metadata: {
+          scope,
+          timestamp: at_time || new Date().toISOString(),
+          total_nodes: nodes.length,
+          total_edges: edges.length,
+          truncated: nodes.length >= max_nodes || edges.length >= max_edges
+        },
+        nodes: nodes.map(node => ({
+          id: node.id,
+          type: node.metadata?.type,
+          version: node.version,
+          ...(include_metadata && { metadata: node.metadata }),
+          ...(include_content_preview && {
+            preview: node.content.substring(0, 100) + (node.content.length > 100 ? '...' : '')
+          })
+        })),
+        edges: edges.map(edge => ({
+          from: edge.from_node,
+          to: edge.to_node,
+          relation: edge.relation,
+          ...(include_metadata && edge.metadata && { metadata: edge.metadata })
+        }))
+      };
+      
+      if (include_stats) {
+        result.stats = this.calculateGraphStats(nodes, edges);
+      }
+      
+      return result;
+    }
+  }
+
+  /**
+   * Generate Mermaid diagram
+   */
+  private generateMermaidDiagram(
+    nodes: Node[],
+    edges: Edge[],
+    options: { include_metadata?: boolean; include_content_preview?: boolean }
+  ): string {
+    let mermaid = 'graph TD\n';
+    
+    // Add nodes
+    for (const node of nodes) {
+      const emoji = node.metadata?.emoji || '📄';
+      let label = `${emoji} ${node.id}`;
+      
+      let subtitle = `v${node.version || 1}`;
+      if (node.metadata?.status) {
+        subtitle = node.metadata.status;
+      }
+      
+      mermaid += `    ${this.sanitizeMermaidId(node.id)}["${label}<br/>${subtitle}"]\n`;
+    }
+    
+    mermaid += '\n';
+    
+    // Add edges
+    for (const edge of edges) {
+      const label = edge.relation || 'related';
+      const fromId = this.sanitizeMermaidId(edge.from_node);
+      const toId = this.sanitizeMermaidId(edge.to_node);
+      mermaid += `    ${fromId} -->|${label}| ${toId}\n`;
+    }
+    
+    mermaid += '\n';
+    
+    // Add styling
+    const styleMap: Record<string, string> = {
+      'contract': '#90EE90',
+      'email': '#87CEEB',
+      'note': '#FFB6C1',
+      'draft': '#FFE4B5',
+      'review': '#F0E68C',
+      'final': '#90EE90',
+      'urgent': '#FF6B6B'
+    };
+    
+    for (const node of nodes) {
+      const type = node.metadata?.type;
+      const status = node.metadata?.status;
+      const nodeId = this.sanitizeMermaidId(node.id);
+      
+      if (type && styleMap[type]) {
+        mermaid += `    style ${nodeId} fill:${styleMap[type]}\n`;
+      } else if (status && styleMap[status]) {
+        mermaid += `    style ${nodeId} fill:${styleMap[status]}\n`;
+      }
+      
+      if (node.metadata?.tags?.includes('urgent')) {
+        mermaid += `    style ${nodeId} stroke:#FF0000,stroke-width:3px\n`;
+      }
+    }
+    
+    return mermaid;
+  }
+
+  /**
+   * Sanitize node ID for Mermaid
+   */
+  private sanitizeMermaidId(id: string): string {
+    return id.replace(/[^a-zA-Z0-9_]/g, '_');
+  }
+
+  /**
+   * Calculate graph statistics
+   */
+  private calculateGraphStats(nodes: Node[], edges: Edge[]): any {
+    const stats: any = {
+      node_type_distribution: {} as Record<string, number>,
+      relationship_types: {} as Record<string, number>,
+      tag_distribution: {} as Record<string, number>,
+      version_distribution: {} as Record<number, number>
+    };
+    
+    for (const node of nodes) {
+      const type = node.metadata?.type || 'unknown';
+      stats.node_type_distribution[type] = (stats.node_type_distribution[type] || 0) + 1;
+      
+      const version = node.version || 1;
+      stats.version_distribution[version] = (stats.version_distribution[version] || 0) + 1;
+      
+      if (node.metadata?.tags) {
+        for (const tag of node.metadata.tags) {
+          stats.tag_distribution[tag] = (stats.tag_distribution[tag] || 0) + 1;
+        }
+      }
+    }
+    
+    for (const edge of edges) {
+      const relation = edge.relation || 'related';
+      stats.relationship_types[relation] = (stats.relationship_types[relation] || 0) + 1;
+    }
+    
+    return stats;
+  }
+
+  // ==================== DOCUMENT MANAGEMENT (Part 2B) ====================
+
+  /**
+   * Update document (creates new version)
+   */
+  async updateNode(
+    id: string,
+    updates: {
+      content?: string;
+      metadata?: RichMetadata;
+      merge_metadata?: boolean;
+      valid_from?: string;
+    }
+  ): Promise<Node> {
+    const current = this.getNodeCurrent(id);
+    
+    if (!current) {
+      throw new Error(`Cannot update non-existent document: ${id}`);
+    }
+    
+    const finalContent = updates.content !== undefined
+      ? updates.content
+      : current.content;
+    
+    let finalMetadata: RichMetadata | undefined;
+    
+    if (updates.metadata) {
+      if (updates.merge_metadata) {
+        finalMetadata = {
+          ...current.metadata,
+          ...updates.metadata,
+          tags: updates.metadata.tags || current.metadata?.tags,
+          keywords: updates.metadata.keywords || current.metadata?.keywords,
+        };
+      } else {
+        finalMetadata = updates.metadata;
+      }
+    } else {
+      finalMetadata = current.metadata;
+    }
+    
+    console.log(`📝 Updating document "${id}" (creating v${(current.version || 1) + 1})`);
+    
+    return this.addNode({
+      id,
+      content: finalContent,
+      metadata: finalMetadata,
+      valid_from: updates.valid_from
+    });
+  }
+
+  // ==================== TIMELINE & HISTORY (Part 2B) ====================
+
+  /**
+   * Get timeline of changes
+   */
+  getNodeTimeline(id: string): TimelineEntry[] {
+    const stmt = this.db.prepare(`
+      SELECT
+        valid_from as timestamp,
+        CASE
+          WHEN version = 1 THEN 'created'
+          WHEN valid_until IS NOT NULL THEN 'deleted'
+          ELSE 'updated'
+        END as event,
+        version,
+        substr(content, 1, 100) as content_preview,
+        metadata
+      FROM nodes
+      WHERE id = ?
+      ORDER BY valid_from ASC
+    `);
+    
+    const rows = stmt.all(id) as any[];
+    
+    if (rows.length === 0) {
+      return [];
+    }
+    
+    return rows.map((row, idx) => {
+      const changes = this.detectChanges(row, rows, idx);
+      
+      return {
+        timestamp: row.timestamp,
+        event: row.event as 'created' | 'updated' | 'deleted',
+        version: row.version,
+        content_preview: row.content_preview,
+        changes
+      };
+    });
+  }
+
+  /**
+   * Detect what changed
+   */
+  private detectChanges(current: any, allVersions: any[], currentIdx: number): string[] {
+    const changes: string[] = [];
+    
+    if (currentIdx === 0) {
+      return ['Initial version'];
+    }
+    
+    const previous = allVersions[currentIdx - 1];
+    
+    if (current.content !== previous.content) {
+      changes.push('Content modified');
+    }
+    
+    try {
+      if (current.metadata && previous.metadata) {
+        const currentMeta = JSON.parse(current.metadata);
+        const prevMeta = JSON.parse(previous.metadata);
+        
+        if (JSON.stringify(currentMeta.tags) !== JSON.stringify(prevMeta.tags)) {
+          changes.push('Tags updated');
+        }
+        
+        if (currentMeta.status !== prevMeta.status) {
+          changes.push(`Status: ${prevMeta.status || 'none'} → ${currentMeta.status || 'none'}`);
+        }
+        
+        if (currentMeta.type !== prevMeta.type) {
+          changes.push(`Type: ${prevMeta.type || 'none'} → ${currentMeta.type || 'none'}`);
+        }
+        
+        const allKeys = new Set([
+          ...Object.keys(currentMeta),
+          ...Object.keys(prevMeta)
+        ]);
+        
+        for (const key of allKeys) {
+          if (!['tags', 'status', 'type'].includes(key) &&
+              JSON.stringify(currentMeta[key]) !== JSON.stringify(prevMeta[key])) {
+            changes.push(`${key} changed`);
+          }
+        }
+      }
+    } catch (e) {
+      // Skip if JSON parse fails
+    }
+    
+    return changes.length > 0 ? changes : ['Minor update'];
+  }
+
+  /**
+   * Compare two versions
+   */
+  compareVersions(id: string, version1: number, version2: number) {
+    const v1 = this.getNodeVersion(id, version1);
+    const v2 = this.getNodeVersion(id, version2);
+    
+    if (!v1 || !v2) {
+      throw new Error(`Version not found for document: ${id}`);
+    }
+    
+    const differences = {
+      content_changed: v1.content !== v2.content,
+      metadata_changes: [] as string[],
+      content_diff: {
+        length_change: v2.content.length - v1.content.length,
+        v1_length: v1.content.length,
+        v2_length: v2.content.length
+      }
+    };
+    
+    const meta1 = v1.metadata || {};
+    const meta2 = v2.metadata || {};
+    
+    const allKeys = new Set([...Object.keys(meta1), ...Object.keys(meta2)]);
+    
+    for (const key of allKeys) {
+      if (JSON.stringify(meta1[key]) !== JSON.stringify(meta2[key])) {
+        differences.metadata_changes.push(key);
+      }
+    }
+    
+    return {
+      version1: v1,
+      version2: v2,
+      differences
+    };
+  }
+
+  /**
+   * Get documents created in time range
+   */
+  getNodesCreatedBetween(start: string, end: string): Node[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE valid_from >= ? AND valid_from <= ?
+        AND version = 1
+      ORDER BY valid_from ASC
+    `);
+    
+    const rows = stmt.all(start, end) as any[];
+    return rows.map(row => this.rowToNode(row)!);
+  }
+
+  /**
+   * Get documents deleted in time range
+   */
+  getNodesDeletedBetween(start: string, end: string): Node[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE valid_until >= ? AND valid_until <= ?
+      ORDER BY valid_until ASC
+    `);
+    
+    const rows = stmt.all(start, end) as any[];
+    return rows.map(row => this.rowToNode(row)!);
+  }
+
+  /**
+   * Get documents modified in time range
+   */
+  getNodesModifiedBetween(start: string, end: string): Node[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE valid_from >= ? AND valid_from <= ?
+        AND version > 1
+      ORDER BY valid_from ASC
+    `);
+    
+    const rows = stmt.all(start, end) as any[];
+    return rows.map(row => this.rowToNode(row)!);
   }
 
   close(): void {

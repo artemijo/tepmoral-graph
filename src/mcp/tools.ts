@@ -74,6 +74,48 @@ export const TagOperationSchema = z.object({
   }).optional().describe('Rename tag globally (all documents)'),
 });
 
+export const UpdateDocumentSchema = z.object({
+  id: z.string().describe('Document identifier to update'),
+  content: z.string().optional().describe('New document content'),
+  metadata: z.record(z.any()).optional().describe('New metadata (tags, path, emoji, keywords, vocabulary, map, and custom fields)'),
+  merge_metadata: z.boolean().optional().default(true).describe('Merge with existing metadata (true) or replace completely (false)'),
+  valid_from: z.string().optional().describe('ISO timestamp for when this version becomes valid (default: now)'),
+});
+
+export const GetDocumentTimelineSchema = z.object({
+  id: z.string().describe('Document identifier'),
+});
+
+export const CompareVersionsSchema = z.object({
+  id: z.string().describe('Document identifier'),
+  version1: z.number().describe('First version number to compare'),
+  version2: z.number().describe('Second version number to compare'),
+});
+
+export const GetTimeRangeSchema = z.object({
+  start: z.string().describe('Start date (ISO 8601 format)'),
+  end: z.string().describe('End date (ISO 8601 format)'),
+});
+
+export const MapGraphSchema = z.object({
+  scope: z.enum(['all', 'filtered', 'subgraph', 'temporal_slice']).optional().default('all').describe('Map scope: all nodes, filtered, subgraph around focus nodes, or temporal snapshot'),
+  filters: z.object({
+    tags: z.array(z.string()).optional().describe('Filter by tags (must have ALL)'),
+    path_prefix: z.array(z.string()).optional().describe('Filter by path prefix'),
+    created_after: z.string().optional().describe('Filter by creation date (ISO 8601)'),
+    type: z.string().optional().describe('Filter by document type'),
+  }).optional().describe('Filter criteria for "filtered" scope'),
+  focus_nodes: z.array(z.string()).optional().describe('Focus nodes for "subgraph" scope'),
+  radius: z.number().optional().default(2).describe('Search radius for "subgraph" scope (default: 2)'),
+  at_time: z.string().optional().describe('Timestamp for "temporal_slice" scope (ISO 8601)'),
+  max_nodes: z.number().optional().default(100).describe('Maximum nodes to return (default: 100)'),
+  max_edges: z.number().optional().default(500).describe('Maximum edges to return (default: 500)'),
+  include_metadata: z.boolean().optional().default(true).describe('Include metadata in results (default: true)'),
+  include_content_preview: z.boolean().optional().default(true).describe('Include content preview (default: true)'),
+  include_stats: z.boolean().optional().default(true).describe('Include graph statistics (default: true)'),
+  format: z.enum(['json', 'mermaid']).optional().default('json').describe('Output format (default: json)'),
+});
+
 // Tool definitions for MCP
 export const tools = [
   // ==================== DOCUMENT TOOLS ====================
@@ -360,6 +402,218 @@ export const tools = [
   },
   
   // ==================== STATS TOOL ====================
+  
+  {
+    name: 'graph_update_document',
+    description: 'Update document (creates new version) with content and metadata changes',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Document identifier to update'
+        },
+        content: {
+          type: 'string',
+          description: 'New document content'
+        },
+        metadata: {
+          type: 'object',
+          description: 'New metadata (tags, path, emoji, keywords, vocabulary, map, and custom fields)'
+        },
+        merge_metadata: {
+          type: 'boolean',
+          description: 'Merge with existing metadata (true) or replace completely (false)',
+          default: true
+        },
+        valid_from: {
+          type: 'string',
+          description: 'ISO timestamp for when this version becomes valid (default: now)'
+        }
+      },
+      required: ['id']
+    }
+  },
+  
+  {
+    name: 'graph_get_document_timeline',
+    description: 'Get timeline of changes for a document (created, updated, deleted events)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Document identifier'
+        }
+      },
+      required: ['id']
+    }
+  },
+  
+  {
+    name: 'graph_compare_versions',
+    description: 'Compare two versions of a document to see what changed',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Document identifier'
+        },
+        version1: {
+          type: 'number',
+          description: 'First version number to compare'
+        },
+        version2: {
+          type: 'number',
+          description: 'Second version number to compare'
+        }
+      },
+      required: ['id', 'version1', 'version2']
+    }
+  },
+  
+  {
+    name: 'graph_get_created_between',
+    description: 'Get documents created in a specific date range',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: {
+          type: 'string',
+          description: 'Start date (ISO 8601 format)'
+        },
+        end: {
+          type: 'string',
+          description: 'End date (ISO 8601 format)'
+        }
+      },
+      required: ['start', 'end']
+    }
+  },
+  
+  {
+    name: 'graph_get_modified_between',
+    description: 'Get documents modified in a specific date range',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: {
+          type: 'string',
+          description: 'Start date (ISO 8601 format)'
+        },
+        end: {
+          type: 'string',
+          description: 'End date (ISO 8601 format)'
+        }
+      },
+      required: ['start', 'end']
+    }
+  },
+  
+  {
+    name: 'graph_get_deleted_between',
+    description: 'Get documents deleted in a specific date range',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: {
+          type: 'string',
+          description: 'Start date (ISO 8601 format)'
+        },
+        end: {
+          type: 'string',
+          description: 'End date (ISO 8601 format)'
+        }
+      },
+      required: ['start', 'end']
+    }
+  },
+  
+  {
+    name: 'graph_map',
+    description: 'Generate comprehensive graph map with various scopes and output formats',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          enum: ['all', 'filtered', 'subgraph', 'temporal_slice'],
+          description: 'Map scope: all nodes, filtered, subgraph around focus nodes, or temporal snapshot',
+          default: 'all'
+        },
+        filters: {
+          type: 'object',
+          description: 'Filter criteria for "filtered" scope',
+          properties: {
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter by tags (must have ALL)'
+            },
+            path_prefix: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter by path prefix'
+            },
+            created_after: {
+              type: 'string',
+              description: 'Filter by creation date (ISO 8601)'
+            },
+            type: {
+              type: 'string',
+              description: 'Filter by document type'
+            }
+          }
+        },
+        focus_nodes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Focus nodes for "subgraph" scope'
+        },
+        radius: {
+          type: 'number',
+          description: 'Search radius for "subgraph" scope (default: 2)',
+          default: 2
+        },
+        at_time: {
+          type: 'string',
+          description: 'Timestamp for "temporal_slice" scope (ISO 8601)'
+        },
+        max_nodes: {
+          type: 'number',
+          description: 'Maximum nodes to return (default: 100)',
+          default: 100
+        },
+        max_edges: {
+          type: 'number',
+          description: 'Maximum edges to return (default: 500)',
+          default: 500
+        },
+        include_metadata: {
+          type: 'boolean',
+          description: 'Include metadata in results (default: true)',
+          default: true
+        },
+        include_content_preview: {
+          type: 'boolean',
+          description: 'Include content preview (default: true)',
+          default: true
+        },
+        include_stats: {
+          type: 'boolean',
+          description: 'Include graph statistics (default: true)',
+          default: true
+        },
+        format: {
+          type: 'string',
+          enum: ['json', 'mermaid'],
+          description: 'Output format (default: json)',
+          default: 'json'
+        }
+      }
+    }
+  },
   
   {
     name: 'graph_stats',

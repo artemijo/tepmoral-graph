@@ -70,9 +70,30 @@ export class TemporalGraphServer {
           case 'graph_find_similar':
             return await this.handleFindSimilar(args);
           
+          case 'graph_update_document':  // ← NEW
+            return await this.handleUpdateDocument(args);
+            
+          case 'graph_get_document_timeline':  // ← NEW
+            return this.handleGetDocumentTimeline(args);
+            
+          case 'graph_compare_versions':  // ← NEW
+            return this.handleCompareVersions(args);
+            
+          case 'graph_get_created_between':  // ← NEW
+            return this.handleGetCreatedBetween(args);
+            
+          case 'graph_get_modified_between':  // ← NEW
+            return this.handleGetModifiedBetween(args);
+            
+          case 'graph_get_deleted_between':  // ← NEW
+            return this.handleGetDeletedBetween(args);
+            
+          case 'graph_map':  // ← NEW
+            return this.handleMapGraph(args);
+            
           case 'graph_stats':  // ← UPDATED
             return this.handleStats();
-          
+            
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -427,7 +448,227 @@ export class TemporalGraphServer {
       };
     }
   }
-
+  
+  private async handleUpdateDocument(args: any) {
+    try {
+      const node = await this.api.updateDocument(
+        args.id,
+        {
+          content: args.content,
+          metadata: args.metadata,
+          merge_metadata: args.merge_metadata,
+          valid_from: args.valid_from
+        }
+      );
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              document: node,
+              message: `Document "${args.id}" updated successfully (v${node.version})`,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error updating document: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleGetDocumentTimeline(args: any) {
+    try {
+      const timeline = this.api.getDocumentTimeline(args.id);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              document: args.id,
+              count: timeline.length,
+              timeline,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error getting timeline: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleCompareVersions(args: any) {
+    try {
+      const comparison = this.api.compareDocumentVersions(args.id, args.version1, args.version2);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              document: args.id,
+              version1: args.version1,
+              version2: args.version2,
+              comparison,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error comparing versions: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleGetCreatedBetween(args: any) {
+    try {
+      const documents = this.api.getDocumentsCreatedBetween(args.start, args.end);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              range: `${args.start} to ${args.end}`,
+              count: documents.length,
+              documents,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error getting created documents: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleGetModifiedBetween(args: any) {
+    try {
+      const documents = this.api.getDocumentsModifiedBetween(args.start, args.end);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              range: `${args.start} to ${args.end}`,
+              count: documents.length,
+              documents,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error getting modified documents: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleGetDeletedBetween(args: any) {
+    try {
+      const documents = this.api.getDocumentsDeletedBetween(args.start, args.end);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              range: `${args.start} to ${args.end}`,
+              count: documents.length,
+              documents,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error getting deleted documents: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
+  private handleMapGraph(args: any) {
+    try {
+      const map = this.api.mapGraph({
+        scope: args.scope,
+        filters: args.filters,
+        focus_nodes: args.focus_nodes,
+        radius: args.radius,
+        at_time: args.at_time,
+        max_nodes: args.max_nodes,
+        max_edges: args.max_edges,
+        include_metadata: args.include_metadata,
+        include_content_preview: args.include_content_preview,
+        include_stats: args.include_stats,
+        format: args.format
+      });
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: typeof map === 'string' ? map : JSON.stringify(map, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Error mapping graph: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+  
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);

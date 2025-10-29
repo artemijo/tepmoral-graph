@@ -13,6 +13,7 @@ import type {
   TagOperation,
   TemporalOptions,
   TimelineEntry,
+  RichMetadata,
 } from '../types/index.js';
 
 export class GraphAPI {
@@ -207,6 +208,70 @@ export class GraphAPI {
    */
   getDocumentVersionCount(id: string): number {
     return this.db.getNodeVersionCount(id);
+  }
+
+  // ==================== NAVIGATION & VISUALIZATION (Part 2A) ====================
+
+  exploreGraph(options: {
+    start: string;
+    strategy: 'breadth' | 'depth' | 'relationship';
+    max_depth?: number;
+    max_nodes?: number;
+    follow_relations?: string[];
+    filters?: any;
+    at_time?: string;
+  }): any {
+    return this.db.exploreGraph(options);
+  }
+
+  mapGraph(options: {
+    scope: 'all' | 'filtered' | 'subgraph' | 'temporal_slice';
+    filters?: any;
+    focus_nodes?: string[];
+    radius?: number;
+    at_time?: string;
+    max_nodes?: number;
+    max_edges?: number;
+    include_metadata?: boolean;
+    include_content_preview?: boolean;
+    include_stats?: boolean;
+    format?: 'json' | 'mermaid';
+  }): any {
+    return this.db.mapGraph(options);
+  }
+
+  // ==================== DOCUMENT MANAGEMENT (Part 2B) ====================
+
+  async updateDocument(
+    id: string,
+    updates: {
+      content?: string;
+      metadata?: RichMetadata;
+      merge_metadata?: boolean;
+      valid_from?: string;
+    }
+  ): Promise<Node> {
+    return this.db.updateNode(id, updates);
+  }
+
+  getDocumentTimeline(id: string): TimelineEntry[] {
+    return this.db.getNodeTimeline(id);
+  }
+
+  compareDocumentVersions(id: string, version1: number, version2: number) {
+    return this.db.compareVersions(id, version1, version2);
+  }
+
+  getDocumentsCreatedBetween(start: string, end: string): Node[] {
+    return this.db.getNodesCreatedBetween(start, end);
+  }
+
+  getDocumentsDeletedBetween(start: string, end: string): Node[] {
+    return this.db.getNodesDeletedBetween(start, end);
+  }
+
+  getDocumentsModifiedBetween(start: string, end: string): Node[] {
+    return this.db.getNodesModifiedBetween(start, end);
   }
 
   close(): void {
