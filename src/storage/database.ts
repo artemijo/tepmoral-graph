@@ -11,6 +11,9 @@ import type {
   GraphStats,
   NeighborResult,
   Direction,
+  RichMetadata,
+  SearchOptions,
+  TagOperation,
 } from '../types/index.js';
 
 const SCHEMA_SQL = `
@@ -193,15 +196,7 @@ export class GraphDB {
     `);
 
     const row = stmt.get(id) as any;
-    if (!row) return null;
-
-    return {
-      id: row.id,
-      type: row.type,
-      content: row.content,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      created_at: row.created_at,
-    };
+    return this.rowToNode(row);
   }
 
   listNodes(limit: number = 100): Node[] {
@@ -213,13 +208,7 @@ export class GraphDB {
     `);
 
     const rows = stmt.all(limit) as any[];
-    return rows.map(row => ({
-      id: row.id,
-      type: row.type,
-      content: row.content,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      created_at: row.created_at,
-    }));
+    return rows.map(row => this.rowToNode(row)!);
   }
 
   deleteNode(id: string): boolean {
@@ -423,13 +412,10 @@ export class GraphDB {
 
       const rows = stmt.all(query, limit) as any[];
       
-      return rows.map(row => ({
-        id: row.id,
-        type: row.type,
-        content: row.content,
-        metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-        created_at: row.created_at,
-      }));
+      return rows.map(row => {
+        // Parse metadata and merge type into it if it exists
+        return this.rowToNode(row)!;
+      });
     } catch (error) {
       console.error('Full-text search error:', error);
       // Fallback to basic LIKE search if FTS fails
@@ -442,13 +428,10 @@ export class GraphDB {
       `);
       
       const rows = fallbackStmt.all(`%${query}%`, limit) as any[];
-      return rows.map(row => ({
-        id: row.id,
-        type: row.type,
-        content: row.content,
-        metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-        created_at: row.created_at,
-      }));
+      return rows.map(row => {
+        // Parse metadata and merge type into it if it exists
+        return this.rowToNode(row)!;
+      });
     }
   }
 
@@ -532,6 +515,416 @@ export class GraphDB {
       SELECT rowid, id, content FROM nodes;
     `);
     console.log('FTS index rebuilt');
+  }
+
+  /**
+   * Smart search with rich metadata filtering
+   */
+  searchDocuments(options: SearchOptions): Node[] {
+    let sql = 'SELECT * FROM nodes WHERE 1=1';
+    const params: any[] = [];
+    
+    // Full-text search on content
+    if (options.query) {
+      sql += ` AND id IN (
+        SELECT id FROM nodes_fts
+        WHERE nodes_fts MATCH ?
+      )`;
+      params.push(options.query);
+    }
+    
+    // Apply metadata filters
+    if (options.filters) {
+      const { tags, keywords, path_prefix, emoji, type, author } = options.filters;
+      
+      // Filter by tags (must have ALL specified tags)
+      if (tags && tags.length > 0) {
+        for (const tag of tags) {
+          sql += ` AND EXISTS (
+            SELECT 1 FROM json_each(json_extract(metadata, '$.tags'))
+            WHERE value = ?
+          )`;
+          params.push(tag);
+        }
+      }
+      
+      // Filter by keywords (must have ALL specified keywords)
+      if (keywords && keywords.length > 0) {
+        for (const keyword of keywords) {
+          sql += ` AND EXISTS (
+            SELECT 1 FROM json_each(json_extract(metadata, '$.keywords'))
+            WHERE value = ?
+          )`;
+          params.push(keyword);
+        }
+      }
+      
+      // Filter by path prefix
+      if (path_prefix && path_prefix.length > 0) {
+        // Check if document's path starts with the specified prefix
+        for (let i = 0; i < path_prefix.length; i++) {
+          sql += ` AND EXISTS (
+            SELECT 1 FROM json_each(json_extract(metadata, '$.path'))
+            WHERE value = ?
+          )`;
+          params.push(path_prefix[i]);
+        }
+      }
+      
+      // Filter by emoji
+      if (emoji) {
+        sql += ` AND json_extract(metadata, '$.emoji') = ?`;
+        params.push(emoji);
+      }
+      
+      // Filter by type
+      if (type) {
+        sql += ` AND json_extract(metadata, '$.type') = ?`;
+        params.push(type);
+      }
+      
+      // Filter by author
+      if (author) {
+        sql += ` AND json_extract(metadata, '$.author') = ?`;
+        params.push(author);
+      }
+      
+      // Handle custom filters
+      for (const [key, value] of Object.entries(options.filters)) {
+        if (!['tags', 'keywords', 'path_prefix', 'emoji', 'type', 'author'].includes(key)) {
+          sql += ` AND json_extract(metadata, '$.${key}') = ?`;
+          params.push(value);
+        }
+      }
+    }
+    
+    // Sorting
+    const sortBy = options.sort_by || 'created_at';
+    const sortOrder = options.sort_order || 'desc';
+    sql += ` ORDER BY ${sortBy} ${sortOrder.toUpperCase()}`;
+    
+    // Limit
+    const limit = options.limit || 10;
+    sql += ` LIMIT ?`;
+    params.push(limit);
+    
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as any[];
+    
+    return rows.map(row => this.rowToNode(row)!);
+  }
+
+  /**
+   * List documents grouped by path
+   */
+  listDocumentsByPath(): Record<string, Node[]> {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE json_extract(metadata, '$.path') IS NOT NULL
+      ORDER BY created_at DESC
+    `);
+    
+    const rows = stmt.all() as any[];
+    const grouped: Record<string, Node[]> = {};
+    
+    for (const row of rows) {
+      const node = this.rowToNode(row)!;
+      if (node.metadata?.path) {
+        const pathStr = node.metadata.path.join('/');
+        
+        if (!grouped[pathStr]) {
+          grouped[pathStr] = [];
+        }
+        grouped[pathStr].push(node);
+      }
+    }
+    
+    return grouped;
+  }
+
+  /**
+   * Get metadata statistics (all tags, keywords, emojis used)
+   */
+  getMetadataStats(): {
+    tags: Record<string, number>;
+    keywords: Record<string, number>;
+    emojis: Record<string, number>;
+    types: Record<string, number>;
+    paths: string[];
+  } {
+    const stmt = this.db.prepare('SELECT metadata FROM nodes WHERE metadata IS NOT NULL');
+    const rows = stmt.all() as any[];
+    
+    const stats = {
+      tags: {} as Record<string, number>,
+      keywords: {} as Record<string, number>,
+      emojis: {} as Record<string, number>,
+      types: {} as Record<string, number>,
+      paths: [] as string[]
+    };
+    
+    const seenPaths = new Set<string>();
+    
+    for (const row of rows) {
+      try {
+        const meta = JSON.parse(row.metadata) as RichMetadata;
+        
+        // Count tags
+        if (meta.tags && Array.isArray(meta.tags)) {
+          meta.tags.forEach(tag => {
+            stats.tags[tag] = (stats.tags[tag] || 0) + 1;
+          });
+        }
+        
+        // Count keywords
+        if (meta.keywords && Array.isArray(meta.keywords)) {
+          meta.keywords.forEach(kw => {
+            stats.keywords[kw] = (stats.keywords[kw] || 0) + 1;
+          });
+        }
+        
+        // Count emojis
+        if (meta.emoji) {
+          stats.emojis[meta.emoji] = (stats.emojis[meta.emoji] || 0) + 1;
+        }
+        
+        // Count types
+        if (meta.type) {
+          stats.types[meta.type] = (stats.types[meta.type] || 0) + 1;
+        }
+        
+        // Collect unique paths
+        if (meta.path && Array.isArray(meta.path)) {
+          const pathStr = meta.path.join('/');
+          if (!seenPaths.has(pathStr)) {
+            stats.paths.push(pathStr);
+            seenPaths.add(pathStr);
+          }
+        }
+      } catch (error) {
+        // Skip invalid JSON
+        console.error('Invalid metadata JSON:', error);
+      }
+    }
+    
+    return stats;
+  }
+
+  /**
+   * Helper method to convert database row to Node
+   */
+  private rowToNode(row: any): Node | null {
+    if (!row) return null;
+    
+    // Parse metadata and merge type into it if it exists
+    let metadata: RichMetadata = {};
+    try {
+      metadata = row.metadata ? JSON.parse(row.metadata) as RichMetadata : {};
+    } catch (error) {
+      console.error('Error parsing metadata:', error, 'Raw metadata:', row.metadata);
+      metadata = {};
+    }
+    
+    if (row.type && row.type !== 'content') {
+      metadata.type = row.type;
+    }
+
+    return {
+      id: row.id,
+      content: row.content,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+      created_at: row.created_at,
+    };
+  }
+
+  /**
+   * Universal tag operations
+   */
+  performTagOperation(operation: TagOperation): any {
+    const { action, document_id, document_filter, tags, rename } = operation;
+    
+    switch (action) {
+      case 'add':
+        return this.addTagsToDocuments(document_id, document_filter, tags!);
+      
+      case 'remove':
+        return this.removeTagsFromDocuments(document_id, document_filter, tags!);
+      
+      case 'rename':
+        return this.renameTag(rename!.from, rename!.to);
+      
+      case 'list':
+        return this.listAllTags();
+      
+      case 'get':
+        return this.getDocumentTags(document_id!);
+      
+      default:
+        throw new Error(`Unknown tag action: ${action}`);
+    }
+  }
+
+  /**
+   * Add tags to document(s)
+   */
+  private addTagsToDocuments(
+    documentId?: string,
+    filter?: TagOperation['document_filter'],
+    newTags: string[] = []
+  ): { updated: number; documents: string[] } {
+    return this.transaction(() => {
+      const targetDocs = this.getTargetDocuments(documentId, filter);
+      const updatedDocs: string[] = [];
+      
+      for (const doc of targetDocs) {
+        const currentTags = Array.isArray(doc.metadata?.tags) ? doc.metadata.tags : [];
+        const updatedTags = Array.from(new Set([...currentTags, ...newTags]));
+        
+        const stmt = this.db.prepare(`
+          UPDATE nodes
+          SET metadata = json_set(
+            COALESCE(metadata, '{}'),
+            '$.tags',
+            json(?)
+          )
+          WHERE id = ?
+        `);
+        
+        stmt.run(JSON.stringify(updatedTags), doc.id);
+        updatedDocs.push(doc.id);
+      }
+      
+      return {
+        updated: updatedDocs.length,
+        documents: updatedDocs
+      };
+    });
+  }
+
+  /**
+   * Remove tags from document(s)
+   */
+  private removeTagsFromDocuments(
+    documentId?: string,
+    filter?: TagOperation['document_filter'],
+    tagsToRemove: string[] = []
+  ): { updated: number; documents: string[] } {
+    return this.transaction(() => {
+      const targetDocs = this.getTargetDocuments(documentId, filter);
+      const updatedDocs: string[] = [];
+      
+      for (const doc of targetDocs) {
+        const currentTags = Array.isArray(doc.metadata?.tags) ? doc.metadata.tags : [];
+        const updatedTags = currentTags.filter(tag => !tagsToRemove.includes(tag));
+        
+        const stmt = this.db.prepare(`
+          UPDATE nodes
+          SET metadata = json_set(
+            metadata,
+            '$.tags',
+            json(?)
+          )
+          WHERE id = ?
+        `);
+        
+        stmt.run(JSON.stringify(updatedTags), doc.id);
+        updatedDocs.push(doc.id);
+      }
+      
+      return {
+        updated: updatedDocs.length,
+        documents: updatedDocs
+      };
+    });
+  }
+
+  /**
+   * Rename a tag across all documents
+   */
+  private renameTag(oldTag: string, newTag: string): { updated: number } {
+    return this.transaction(() => {
+      // Find all docs with the old tag
+      const stmt = this.db.prepare(`
+        SELECT id, metadata FROM nodes
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(json_extract(metadata, '$.tags'))
+          WHERE value = ?
+        )
+      `);
+      
+      const rows = stmt.all(oldTag) as any[];
+      let updated = 0;
+      
+      for (const row of rows) {
+        const meta = JSON.parse(row.metadata) as RichMetadata;
+        if (meta.tags) {
+          meta.tags = meta.tags.map(tag => tag === oldTag ? newTag : tag);
+          
+          const updateStmt = this.db.prepare(`
+            UPDATE nodes
+            SET metadata = ?
+            WHERE id = ?
+          `);
+          
+          updateStmt.run(JSON.stringify(meta), row.id);
+          updated++;
+        }
+      }
+      
+      return { updated };
+    });
+  }
+
+  /**
+   * List all tags with counts
+   */
+  private listAllTags(): { tag: string; count: number }[] {
+    const stats = this.getMetadataStats();
+    
+    return Object.entries(stats.tags)
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Get tags for a specific document
+   */
+  private getDocumentTags(documentId: string): string[] {
+    const node = this.getNode(documentId);
+    if (!node) {
+      throw new Error(`Document not found: ${documentId}`);
+    }
+    return node.metadata?.tags || [];
+  }
+
+  /**
+   * Helper: Get documents matching ID or filter
+   */
+  private getTargetDocuments(
+    documentId?: string,
+    filter?: TagOperation['document_filter']
+  ): Node[] {
+    if (documentId) {
+      const node = this.getNode(documentId);
+      if (!node) {
+        throw new Error(`Document not found: ${documentId}`);
+      }
+      return [node];
+    }
+    
+    if (filter) {
+      return this.searchDocuments({
+        query: filter.content,
+        filters: {
+          tags: filter.tags,
+          keywords: filter.keywords,
+          path_prefix: filter.path
+        },
+        limit: 1000 // Max docs to update at once
+      });
+    }
+    
+    throw new Error('Must specify either document_id or document_filter');
   }
 
   close(): void {

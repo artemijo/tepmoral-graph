@@ -46,11 +46,17 @@ export class TemporalGraphServer {
           case 'graph_get_document':
             return this.handleGetDocument(args);
           
+          case 'graph_search':  // ← NEW (replaces graph_search_content)
+            return this.handleSearch(args);
+          
           case 'graph_list_documents':
             return this.handleListDocuments(args);
           
           case 'graph_delete_document':
             return this.handleDeleteDocument(args);
+          
+          case 'graph_tags':  // ← NEW
+            return this.handleTags(args);
           
           case 'graph_add_relationship':
             return this.handleAddRelationship(args);
@@ -64,17 +70,8 @@ export class TemporalGraphServer {
           case 'graph_find_similar':
             return await this.handleFindSimilar(args);
           
-          case 'graph_search_content':
-            return this.handleSearchContent(args);
-          
-          case 'graph_get_stats':
-            return this.handleGetStats();
-          
-          case 'graph_check_integrity':
-            return this.handleCheckIntegrity();
-          
-          case 'graph_rebuild_search_index':
-            return this.handleRebuildSearchIndex();
+          case 'graph_stats':  // ← UPDATED
+            return this.handleStats();
           
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -286,8 +283,14 @@ export class TemporalGraphServer {
     }
   }
 
-  private handleSearchContent(args: any) {
-    const results = this.api.searchContent(args.query, args.limit);
+  private handleSearch(args: any) {
+    const results = this.api.search({
+      query: args.query,
+      filters: args.filters,
+      limit: args.limit,
+      sort_by: args.sort_by,
+      sort_order: args.sort_order
+    });
     
     return {
       content: [
@@ -295,24 +298,86 @@ export class TemporalGraphServer {
           type: 'text',
           text: JSON.stringify({
             query: args.query,
+            filters: args.filters,
             count: results.length,
-            results,
-          }, null, 2),
-        },
-      ],
+            results
+          }, null, 2)
+        }
+      ]
     };
   }
 
-  private handleGetStats() {
-    const stats = this.api.getStats();
+  private handleTags(args: any) {
+    const result = this.api.manageTags({
+      action: args.action,
+      document_id: args.document_id,
+      document_filter: args.document_filter,
+      tags: args.tags,
+      rename: args.rename
+    });
+    
+    // Format response based on action
+    let message = '';
+    switch (args.action) {
+      case 'add':
+        message = `✅ Added ${args.tags?.length || 0} tag(s) to ${result.updated} document(s)`;
+        break;
+      case 'remove':
+        message = `✅ Removed ${args.tags?.length || 0} tag(s) from ${result.updated} document(s)`;
+        break;
+      case 'rename':
+        message = `✅ Renamed tag "${args.rename.from}" → "${args.rename.to}" in ${result.updated} document(s)`;
+        break;
+      case 'list':
+        message = `📊 Found ${result.length} unique tags`;
+        break;
+      case 'get':
+        message = `📋 Document has ${result.length} tag(s)`;
+        break;
+    }
     
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(stats, null, 2),
-        },
-      ],
+          text: JSON.stringify({
+            success: true,
+            message,
+            result
+          }, null, 2)
+        }
+      ]
+    };
+  }
+
+  private handleStats() {
+    const graphStats = this.api.getStats();
+    const metadataStats = this.api.getMetadataStats();
+    
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            graph: graphStats,
+            metadata: {
+              tags: Object.keys(metadataStats.tags).length,
+              keywords: Object.keys(metadataStats.keywords).length,
+              emojis: Object.keys(metadataStats.emojis).length,
+              types: Object.keys(metadataStats.types).length,
+              paths: metadataStats.paths.length,
+              top_tags: Object.entries(metadataStats.tags)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([tag, count]) => ({ tag, count })),
+              top_emojis: Object.entries(metadataStats.emojis)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([emoji, count]) => ({ emoji, count }))
+            }
+          }, null, 2)
+        }
+      ]
     };
   }
 

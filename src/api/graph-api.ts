@@ -9,6 +9,8 @@ import type {
   GraphStats,
   NeighborResult,
   Direction,
+  SearchOptions,
+  TagOperation,
 } from '../types/index.js';
 
 export class GraphAPI {
@@ -21,6 +23,74 @@ export class GraphAPI {
   // Document management
   async addDocument(id: string, content: string, metadata?: Record<string, any>): Promise<Node> {
     return this.db.addNode({ id, content, metadata });
+  }
+
+  // ==================== RICH METADATA & SEARCH ====================
+
+  /**
+   * Smart search with metadata filtering
+   */
+  search(options: SearchOptions): Node[] {
+    return this.db.searchDocuments(options);
+  }
+
+  /**
+   * List documents grouped by path
+   */
+  listByPath(): Record<string, Node[]> {
+    return this.db.listDocumentsByPath();
+  }
+
+  /**
+   * Get metadata statistics
+   */
+  getMetadataStats(): {
+    tags: Record<string, number>;
+    keywords: Record<string, number>;
+    emojis: Record<string, number>;
+    types: Record<string, number>;
+    paths: string[];
+  } {
+    return this.db.getMetadataStats();
+  }
+
+  // ==================== TAG OPERATIONS ====================
+
+  /**
+   * Universal tag operations
+   */
+  manageTags(operation: TagOperation): any {
+    return this.db.performTagOperation(operation);
+  }
+
+  // Convenience methods (shortcuts for common operations)
+  addTags(documentId: string, tags: string[]): { updated: number; documents: string[] } {
+    return this.manageTags({
+      action: 'add',
+      document_id: documentId,
+      tags
+    });
+  }
+
+  removeTags(documentId: string, tags: string[]): { updated: number; documents: string[] } {
+    return this.manageTags({
+      action: 'remove',
+      document_id: documentId,
+      tags
+    });
+  }
+
+  getTags(documentId: string): string[] {
+    return this.manageTags({
+      action: 'get',
+      document_id: documentId
+    });
+  }
+
+  listTags(): { tag: string; count: number }[] {
+    return this.manageTags({
+      action: 'list'
+    });
   }
 
   getDocument(id: string): Node | null {

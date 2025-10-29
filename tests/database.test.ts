@@ -12,14 +12,15 @@ describe('GraphDB', () => {
     test('should add and retrieve node', async () => {
       await db.addNode({
         id: 'test1',
-        content: 'Test content for node 1',
+        content: 'Test content for node operations',
+        metadata: { type: 'content' }
       });
 
       const node = db.getNode('test1');
       expect(node).toBeDefined();
       expect(node?.id).toBe('test1');
-      expect(node?.content).toBe('Test content for node 1');
-      expect(node?.type).toBe('content');
+      expect(node?.content).toBe('Test content for node operations');
+      expect(node?.metadata?.type).toBe('content');
     });
 
     test('should add node with metadata', async () => {

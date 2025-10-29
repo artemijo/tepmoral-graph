@@ -131,8 +131,8 @@ describe('Phase 0 Fixes: Transactions and Temporal Indexes', () => {
 
       // Get all nodes and filter by type
       const nodes = db.listNodes(10);
-      const documentNodes = nodes.filter(n => n.type === 'document');
-      const noteNodes = nodes.filter(n => n.type === 'note');
+      const documentNodes = nodes.filter(n => n.metadata?.type === 'document');
+      const noteNodes = nodes.filter(n => n.metadata?.type === 'note');
 
       expect(documentNodes).toHaveLength(2);
       expect(noteNodes).toHaveLength(1);

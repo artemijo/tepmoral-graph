@@ -43,203 +43,330 @@ export const FindSimilarSchema = z.object({
   limit: z.number().optional().default(10).describe('Maximum number of similar documents to return'),
 });
 
-export const SearchContentSchema = z.object({
-  query: z.string().describe('Search query (full-text search)'),
-  limit: z.number().optional().default(10).describe('Maximum number of results to return'),
+export const SearchSchema = z.object({
+  query: z.string().optional().describe('Full-text search query (optional)'),
+  filters: z.object({
+    tags: z.array(z.string()).optional().describe('Documents must have ALL these tags'),
+    keywords: z.array(z.string()).optional().describe('Documents must have ALL these keywords'),
+    path_prefix: z.array(z.string()).optional().describe('Path must start with this prefix'),
+    emoji: z.string().optional().describe('Filter by emoji'),
+    type: z.string().optional().describe('Filter by document type'),
+    author: z.string().optional().describe('Filter by author'),
+  }).optional().describe('Filter by metadata fields'),
+  limit: z.number().optional().describe('Maximum results (default: 10)'),
+  sort_by: z.enum(['created_at', 'id']).optional().describe('Sort field (default: created_at)'),
+  sort_order: z.enum(['asc', 'desc']).optional().describe('Sort order (default: desc)'),
+});
+
+export const TagOperationSchema = z.object({
+  action: z.enum(['add', 'remove', 'rename', 'list', 'get']).describe('Tag operation: add/remove tags, rename globally, list all, get doc tags'),
+  document_id: z.string().optional().describe('Target document ID (for add, remove, get actions)'),
+  document_filter: z.object({
+    tags: z.array(z.string()).optional(),
+    keywords: z.array(z.string()).optional(),
+    path: z.array(z.string()).optional(),
+    content: z.string().optional(),
+  }).optional().describe('Filter documents for bulk operations'),
+  tags: z.array(z.string()).optional().describe('Tags to add or remove'),
+  rename: z.object({
+    from: z.string(),
+    to: z.string(),
+  }).optional().describe('Rename tag globally (all documents)'),
 });
 
 // Tool definitions for MCP
 export const tools = [
+  // ==================== DOCUMENT TOOLS ====================
+  
   {
     name: 'graph_add_document',
-    description: 'Add a document to the graph with optional metadata. The content will be automatically vectorized for semantic search.',
+    description: 'Add or update document with rich metadata (tags, path, emoji, vocabulary, map, keywords)',
     inputSchema: {
       type: 'object',
       properties: {
         id: {
           type: 'string',
-          description: 'Unique document identifier',
+          description: 'Unique document identifier'
         },
         content: {
           type: 'string',
-          description: 'Document content (will be vectorized for semantic search)',
+          description: 'Document content (will be vectorized for semantic search)'
         },
         metadata: {
           type: 'object',
-          description: 'Optional metadata (tags, author, etc.)',
-          additionalProperties: true,
-        },
+          description: 'Rich metadata with tags, path, emoji, keywords, vocabulary, map, and custom fields',
+          properties: {
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tags for categorization (e.g., ["legal", "urgent"])'
+            },
+            path: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Hierarchical path (e.g., ["projects", "2024", "contracts"])'
+            },
+            emoji: {
+              type: 'string',
+              description: 'Visual identifier (e.g., "📄", "🔥", "⚖️")'
+            },
+            keywords: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Key concepts (e.g., ["payment", "deadline"])'
+            },
+            vocabulary: {
+              type: 'object',
+              description: 'Term definitions (e.g., {"FOB": "Free On Board"})'
+            },
+            map: {
+              type: 'object',
+              description: 'Document structure map (e.g., {"intro": "lines 1-10"})'
+            },
+            type: {
+              type: 'string',
+              description: 'Document type (e.g., "contract", "email")'
+            },
+            author: {
+              type: 'string',
+              description: 'Document author'
+            },
+            date: {
+              type: 'string',
+              description: 'ISO date string'
+            }
+          }
+        }
       },
-      required: ['id', 'content'],
-    },
+      required: ['id', 'content']
+    }
   },
+  
   {
     name: 'graph_get_document',
-    description: 'Retrieve a document by its ID',
+    description: 'Get document by ID with all metadata',
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
-          type: 'string',
-          description: 'Document identifier',
-        },
+        id: { type: 'string', description: 'Document ID' }
       },
-      required: ['id'],
-    },
+      required: ['id']
+    }
   },
+  
+  {
+    name: 'graph_search',
+    description: 'Smart search: full-text search with metadata filtering (tags, path, emoji, keywords, type)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Full-text search query (optional)'
+        },
+        filters: {
+          type: 'object',
+          description: 'Filter by metadata fields',
+          properties: {
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Documents must have ALL these tags'
+            },
+            keywords: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Documents must have ALL these keywords'
+            },
+            path_prefix: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Path must start with this prefix'
+            },
+            emoji: {
+              type: 'string',
+              description: 'Filter by emoji'
+            },
+            type: {
+              type: 'string',
+              description: 'Filter by document type'
+            },
+            author: {
+              type: 'string',
+              description: 'Filter by author'
+            }
+          }
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results (default: 10)'
+        },
+        sort_by: {
+          type: 'string',
+          enum: ['created_at', 'id'],
+          description: 'Sort field (default: created_at)'
+        },
+        sort_order: {
+          type: 'string',
+          enum: ['asc', 'desc'],
+          description: 'Sort order (default: desc)'
+        }
+      }
+    }
+  },
+  
   {
     name: 'graph_list_documents',
-    description: 'List all documents in the graph (most recent first)',
+    description: 'List documents with optional filtering',
     inputSchema: {
       type: 'object',
       properties: {
         limit: {
           type: 'number',
-          description: 'Maximum number of documents to return (default: 100)',
-        },
-      },
-    },
+          description: 'Maximum documents to return (default: 100)'
+        }
+      }
+    }
   },
+  
   {
     name: 'graph_delete_document',
     description: 'Delete a document and all its relationships',
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
-          type: 'string',
-          description: 'Document identifier to delete',
-        },
+        id: { type: 'string', description: 'Document ID to delete' }
       },
-      required: ['id'],
-    },
+      required: ['id']
+    }
   },
+  
+  // ==================== TAG TOOL ====================
+  
   {
-    name: 'graph_add_relationship',
-    description: 'Add a directed relationship between two documents',
+    name: 'graph_tags',
+    description: 'Manage tags: add, remove, rename, list, or get document tags',
     inputSchema: {
       type: 'object',
       properties: {
-        from: {
+        action: {
           type: 'string',
-          description: 'Source document ID',
+          enum: ['add', 'remove', 'rename', 'list', 'get'],
+          description: 'Tag operation: add/remove tags, rename globally, list all, get doc tags'
         },
-        to: {
+        document_id: {
           type: 'string',
-          description: 'Target document ID',
+          description: 'Target document ID (for add, remove, get actions)'
         },
+        document_filter: {
+          type: 'object',
+          description: 'Filter documents for bulk operations',
+          properties: {
+            tags: { type: 'array', items: { type: 'string' } },
+            keywords: { type: 'array', items: { type: 'string' } },
+            path: { type: 'array', items: { type: 'string' } },
+            content: { type: 'string' }
+          }
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags to add or remove'
+        },
+        rename: {
+          type: 'object',
+          properties: {
+            from: { type: 'string' },
+            to: { type: 'string' }
+          },
+          description: 'Rename tag globally (all documents)'
+        }
+      },
+      required: ['action']
+    }
+  },
+  
+  // ==================== RELATIONSHIP TOOLS ====================
+  
+  {
+    name: 'graph_add_relationship',
+    description: 'Create directed relationship between documents',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Source document ID' },
+        to: { type: 'string', description: 'Target document ID' },
         relation: {
           type: 'string',
-          description: 'Relationship type (e.g., "amends", "references", "causes")',
+          description: 'Relationship type (e.g., "amends", "cites", "depends_on")'
         },
         metadata: {
           type: 'object',
-          description: 'Optional relationship metadata',
-          additionalProperties: true,
-        },
+          description: 'Optional relationship metadata'
+        }
       },
-      required: ['from', 'to'],
-    },
+      required: ['from', 'to']
+    }
   },
+  
   {
     name: 'graph_get_neighbors',
-    description: 'Get all neighboring documents (connected by relationships)',
+    description: 'Get neighboring documents connected by relationships',
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
-          type: 'string',
-          description: 'Document ID',
-        },
+        id: { type: 'string', description: 'Document ID' },
         direction: {
           type: 'string',
           enum: ['incoming', 'outgoing', 'both'],
-          description: 'Direction of relationships to retrieve (default: "both")',
-        },
+          description: 'Direction of relationships (default: both)'
+        }
       },
-      required: ['id'],
-    },
+      required: ['id']
+    }
   },
+  
   {
     name: 'graph_find_path',
-    description: 'Find the shortest path between two documents in the graph',
+    description: 'Find shortest path between two documents',
     inputSchema: {
       type: 'object',
       properties: {
-        from: {
-          type: 'string',
-          description: 'Starting document ID',
-        },
-        to: {
-          type: 'string',
-          description: 'Target document ID',
-        },
+        from: { type: 'string', description: 'Starting document ID' },
+        to: { type: 'string', description: 'Target document ID' },
         maxDepth: {
           type: 'number',
-          description: 'Maximum path depth to search (default: 5)',
-        },
+          description: 'Maximum path depth (default: 5)'
+        }
       },
-      required: ['from', 'to'],
-    },
+      required: ['from', 'to']
+    }
   },
+  
   {
     name: 'graph_find_similar',
     description: 'Find semantically similar documents using vector embeddings',
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
-          type: 'string',
-          description: 'Document ID to find similar documents for',
-        },
+        id: { type: 'string', description: 'Document ID' },
         limit: {
           type: 'number',
-          description: 'Maximum number of similar documents to return (default: 10)',
-        },
+          description: 'Maximum similar documents (default: 10)'
+        }
       },
-      required: ['id'],
-    },
+      required: ['id']
+    }
   },
+  
+  // ==================== STATS TOOL ====================
+  
   {
-    name: 'graph_search_content',
-    description: 'Full-text search across all document content',
+    name: 'graph_stats',
+    description: 'Get graph statistics and metadata overview (tag counts, keywords, emojis, paths)',
     inputSchema: {
       type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results to return (default: 10)',
-        },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'graph_get_stats',
-    description: 'Get statistics about the graph (node count, edge count, average degree)',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'graph_check_integrity',
-    description: 'Check graph integrity and find orphaned nodes or inconsistent edges',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'graph_rebuild_search_index',
-    description: 'Rebuild the full-text search index to fix search issues',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
+      properties: {}
+    }
+  }
 ];
