@@ -37,13 +37,15 @@ describe('Phase 0 Fixes: Transactions and Temporal Indexes', () => {
         metadata: { test: true }
       });
 
-      expect(edge).toEqual({
+      expect(edge).toMatchObject({
         from_node: 'node1',
         to_node: 'node2',
         relation: 'test_relation',
         weight: 1.5,
         metadata: { test: true }
       });
+      expect(edge.valid_from).toBeTruthy();
+      expect(edge.temporal_weight).toBe(1.5);
 
       // Verify edge was actually created
       const neighbors = db.getNeighbors('node1', 'outgoing');
@@ -63,7 +65,7 @@ describe('Phase 0 Fixes: Transactions and Temporal Indexes', () => {
           to: 'node1',
           relation: 'should_fail'
         });
-      }).toThrow('Source document not found: nonexistent');
+      }).toThrow('source node does not exist at this time');
 
       // Verify no partial data was created
       const neighbors = db.getNeighbors('node1', 'incoming');

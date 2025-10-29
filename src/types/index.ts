@@ -67,6 +67,7 @@ export interface NeighborResult {
   id: string;
   relation: string;
   direction: 'incoming' | 'outgoing';
+  depth?: number;  // NEW: for multi-hop queries
 }
 
 export type Direction = 'incoming' | 'outgoing' | 'both';
@@ -102,6 +103,7 @@ export interface AddEdgeInput {
   relation?: string;
   weight?: number;
   metadata?: Record<string, any>;
+  valid_from?: string;  // NEW
 }
 
 // Add search options type

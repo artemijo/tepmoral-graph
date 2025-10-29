@@ -414,6 +414,22 @@ export class GraphDB {
   // ==================== TEMPORAL GET METHODS (Phase 1.B) ====================
 
   /**
+   * Get node at specific time
+   */
+  getNodeAtTime(id: string, timestamp: string): Node | null {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE id = ?
+        AND valid_from <= ?
+        AND (valid_until IS NULL OR valid_until > ?)
+      ORDER BY version DESC
+      LIMIT 1
+    `);
+
+    return this.rowToNode(stmt.get(id, timestamp, timestamp) as any);
+  }
+
+  /**
    * Get current version of node (most common query)
    */
   getNodeCurrent(id: string): Node | null {
@@ -509,80 +525,182 @@ export class GraphDB {
   }
 
   addEdge(input: AddEdgeInput): Edge {
-    const { from, to, relation = 'related', weight = 1.0, metadata } = input;
-
+    const validFrom = input.valid_from || this.now();
+    
     return this.transaction(() => {
-      // Проверяем существование обоих документов
-      const fromExists = this.getNode(from);
-      const toExists = this.getNode(to);
+      // CAUSALITY CHECK: Both nodes must exist at this time
+      const fromNode = this.getNodeAtTime(input.from, validFrom);
+      const toNode = this.getNodeAtTime(input.to, validFrom);
       
-      if (!fromExists) {
-        throw new Error(`Source document not found: ${from}`);
+      if (!fromNode) {
+        throw new Error(
+          `🚫 Temporal violation: Cannot create edge from "${input.from}" ` +
+          `at ${validFrom} - source node does not exist at this time`
+        );
       }
       
-      if (!toExists) {
-        throw new Error(`Target document not found: ${to}`);
+      if (!toNode) {
+        throw new Error(
+          `🚫 Temporal violation: Cannot create edge to "${input.to}" ` +
+          `at ${validFrom} - target node does not exist at this time`
+        );
       }
-
+      
+      // Edge cannot exist before either node was created
+      if (fromNode.valid_from && validFrom < fromNode.valid_from) {
+        throw new Error(
+          `🚫 Causality violation: Edge cannot exist (${validFrom}) ` +
+          `before source node was created (${fromNode.valid_from})`
+        );
+      }
+      
+      if (toNode.valid_from && validFrom < toNode.valid_from) {
+        throw new Error(
+          `🚫 Causality violation: Edge cannot exist (${validFrom}) ` +
+          `before target node was created (${toNode.valid_from})`
+        );
+      }
+      
+      // Create edge with temporal validity
       const stmt = this.db.prepare(`
-        INSERT INTO edges (from_node, to_node, relation, weight, metadata)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO edges (
+          from_node, to_node, relation, weight, metadata,
+          valid_from, valid_until, temporal_weight, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(from_node, to_node) DO UPDATE SET
           relation = excluded.relation,
           weight = excluded.weight,
-          metadata = excluded.metadata
+          metadata = excluded.metadata,
+          valid_from = excluded.valid_from,
+          temporal_weight = excluded.temporal_weight
       `);
-
-      try {
-        stmt.run(from, to, relation, weight, metadata ? JSON.stringify(metadata) : null);
-      } catch (error) {
-        throw new Error(`Failed to create relationship: ${error instanceof Error ? error.message : String(error)}`);
-      }
-
+      
+      stmt.run(
+        input.from,
+        input.to,
+        input.relation || 'related',
+        input.weight || 1.0,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        validFrom,
+        input.weight || 1.0
+      );
+      
+      console.log(`🔗 Created temporal edge: ${input.from} → ${input.to} (valid from ${validFrom})`);
+      
       return {
-        from_node: from,
-        to_node: to,
-        relation,
-        weight,
-        metadata,
+        from_node: input.from,
+        to_node: input.to,
+        relation: input.relation || 'related',
+        weight: input.weight || 1.0,
+        metadata: input.metadata,
+        valid_from: validFrom,
+        temporal_weight: input.weight || 1.0
       };
     });
   }
 
-  getNeighbors(id: string, direction: Direction = 'both'): NeighborResult[] {
-    let query = '';
-    let params: string[] = [];
-
-    if (direction === 'outgoing' || direction === 'both') {
-      query += `
-        SELECT to_node as id, relation, 'outgoing' as direction
-        FROM edges
-        WHERE from_node = ?
-      `;
-      params.push(id);
+  getNeighbors(
+    id: string,
+    direction: Direction = 'both',
+    options?: {
+      depth?: number;
+      max_results?: number;
+      relation_filter?: string[];
+      at_time?: string;  // NEW: temporal support
     }
-
-    if (direction === 'both') {
-      query += ' UNION ALL ';
+  ): NeighborResult[] {
+    const depth = options?.depth || 1;
+    const maxResults = options?.max_results || 50;
+    const relationFilter = options?.relation_filter;
+    const atTime = options?.at_time;
+    
+    if (depth === 1) {
+      // Simple single-hop query
+      let sql = '';
+      const params: any[] = [];
+      
+      // Temporal filtering
+      const temporalFilter = atTime
+        ? `AND valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)`
+        : `AND valid_until IS NULL`;  // Default: current edges only
+      
+      if (direction === 'outgoing' || direction === 'both') {
+        sql += `
+          SELECT to_node as id, relation, 'outgoing' as direction
+          FROM edges
+          WHERE from_node = ?
+            ${temporalFilter}
+        `;
+        params.push(id);
+        if (atTime) {
+          params.push(atTime, atTime);
+        }
+        
+        if (relationFilter) {
+          sql += ` AND relation IN (${relationFilter.map(() => '?').join(',')})`;
+          params.push(...relationFilter);
+        }
+      }
+      
+      if (direction === 'both') {
+        sql += ' UNION ALL ';
+      }
+      
+      if (direction === 'incoming' || direction === 'both') {
+        sql += `
+          SELECT from_node as id, relation, 'incoming' as direction
+          FROM edges
+          WHERE to_node = ?
+            ${temporalFilter}
+        `;
+        params.push(id);
+        if (atTime) {
+          params.push(atTime, atTime);
+        }
+        
+        if (relationFilter) {
+          sql += ` AND relation IN (${relationFilter.map(() => '?').join(',')})`;
+          params.push(...relationFilter);
+        }
+      }
+      
+      sql += ` LIMIT ?`;
+      params.push(maxResults);
+      
+      const stmt = this.db.prepare(sql);
+      return stmt.all(...params) as NeighborResult[];
+    } else {
+      // Multi-hop BFS
+      const visited = new Set<string>();
+      const results: NeighborResult[] = [];
+      const queue: Array<{ id: string; depth: number }> = [{ id, depth: 0 }];
+      
+      while (queue.length > 0 && results.length < maxResults) {
+        const current = queue.shift()!;
+        
+        if (current.depth >= depth) continue;
+        if (visited.has(current.id)) continue;
+        visited.add(current.id);
+        
+        // Get neighbors at this depth
+        const neighbors = this.getNeighbors(current.id, direction, {
+          depth: 1,
+          relation_filter: relationFilter,
+          max_results: maxResults - results.length,
+          at_time: atTime
+        });
+        
+        for (const neighbor of neighbors) {
+          if (!visited.has(neighbor.id)) {
+            results.push({ ...neighbor, depth: current.depth + 1 });
+            queue.push({ id: neighbor.id, depth: current.depth + 1 });
+          }
+        }
+      }
+      
+      return results;
     }
-
-    if (direction === 'incoming' || direction === 'both') {
-      query += `
-        SELECT from_node as id, relation, 'incoming' as direction
-        FROM edges
-        WHERE to_node = ?
-      `;
-      params.push(id);
-    }
-
-    const stmt = this.db.prepare(query);
-    const rows = stmt.all(...params) as any[];
-
-    return rows.map(row => ({
-      id: row.id,
-      relation: row.relation,
-      direction: row.direction as 'incoming' | 'outgoing',
-    }));
   }
 
   findPath(from: string, to: string, maxDepth: number = 5): PathResult | null {
@@ -595,7 +713,7 @@ export class GraphDB {
         UNION ALL
         
         -- Recursive case: explore neighbors
-        SELECT 
+        SELECT
           e.to_node,
           ps.path || ',' || e.to_node,
           ps.depth + 1
@@ -603,6 +721,7 @@ export class GraphDB {
         JOIN edges e ON ps.node = e.from_node
         WHERE ps.depth < ?
           AND instr(ps.path, ',' || e.to_node || ',') = 0  -- Avoid cycles
+          AND e.valid_until IS NULL  -- Only current edges
       )
       SELECT path, depth
       FROM path_search
@@ -620,6 +739,84 @@ export class GraphDB {
       path: pathArray,
       length: row.depth,
     };
+  }
+
+  /**
+   * Find path at specific time
+   */
+  findPathAtTime(
+    from: string,
+    to: string,
+    timestamp: string,
+    maxDepth: number = 5
+  ): { path: string[]; length: number } | null {
+    const stmt = this.db.prepare(`
+      WITH RECURSIVE path_search(node, path, depth) AS (
+        SELECT ?, ?, 0
+        
+        UNION ALL
+        
+        SELECT
+          e.to_node,
+          ps.path || ',' || e.to_node,
+          ps.depth + 1
+        FROM path_search ps
+        JOIN edges e ON ps.node = e.from_node
+        WHERE ps.depth < ?
+          AND instr(ps.path, ',' || e.to_node || ',') = 0
+          AND e.valid_from <= ?
+          AND (e.valid_until IS NULL OR e.valid_until > ?)
+      )
+      SELECT path, depth
+      FROM path_search
+      WHERE node = ?
+      ORDER BY depth
+      LIMIT 1
+    `);
+    
+    const row = stmt.get(from, from, maxDepth, timestamp, timestamp, to) as any;
+    
+    if (!row) return null;
+    
+    return {
+      path: row.path.split(','),
+      length: row.depth
+    };
+  }
+
+  /**
+   * Get graph snapshot at specific time
+   */
+  getGraphSnapshot(timestamp: string): { nodes: Node[]; edges: Edge[] } {
+    // Get all nodes valid at this time
+    const nodeStmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE valid_from <= ?
+        AND (valid_until IS NULL OR valid_until > ?)
+    `);
+    
+    const nodeRows = nodeStmt.all(timestamp, timestamp) as any[];
+    const nodes = nodeRows.map(row => this.rowToNode(row)!);
+    
+    // Get all edges valid at this time
+    const edgeStmt = this.db.prepare(`
+      SELECT * FROM edges
+      WHERE valid_from <= ?
+        AND (valid_until IS NULL OR valid_until > ?)
+    `);
+    
+    const edgeRows = edgeStmt.all(timestamp, timestamp) as any[];
+    const edges = edgeRows.map(row => ({
+      from_node: row.from_node,
+      to_node: row.to_node,
+      relation: row.relation,
+      weight: row.weight,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+      valid_from: row.valid_from,
+      valid_until: row.valid_until
+    }));
+    
+    return { nodes, edges };
   }
 
   async findSimilar(id: string, limit: number = 10): Promise<SimilarityResult[]> {

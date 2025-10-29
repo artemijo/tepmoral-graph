@@ -107,13 +107,49 @@ export class GraphAPI {
     return this.db.deleteNode(id);
   }
 
-  // Relationship management
-  addRelationship(from: string, to: string, relation?: string, metadata?: Record<string, any>): Edge {
-    return this.db.addEdge({ from, to, relation, metadata });
+  // ==================== TEMPORAL RELATIONSHIPS ====================
+
+  findPathAtTime(
+    from: string,
+    to: string,
+    timestamp: string,
+    maxDepth?: number
+  ): { path: string[]; length: number } | null {
+    return this.db.findPathAtTime(from, to, timestamp, maxDepth);
   }
 
-  getNeighbors(id: string, direction?: Direction): NeighborResult[] {
-    return this.db.getNeighbors(id, direction || 'both');
+  getGraphSnapshot(timestamp: string): { nodes: Node[]; edges: Edge[] } {
+    return this.db.getGraphSnapshot(timestamp);
+  }
+
+  // Relationship management
+  addRelationship(
+    from: string,
+    to: string,
+    relation?: string,
+    metadata?: Record<string, any>,
+    valid_from?: string
+  ): Edge {
+    return this.db.addEdge({
+      from,
+      to,
+      relation,
+      metadata,
+      valid_from
+    });
+  }
+
+  getNeighbors(
+    id: string,
+    direction?: Direction,
+    options?: {
+      depth?: number;
+      max_results?: number;
+      relation_filter?: string[];
+      at_time?: string;
+    }
+  ): NeighborResult[] {
+    return this.db.getNeighbors(id, direction || 'both', options);
   }
 
   findPath(from: string, to: string, maxDepth?: number): PathResult | null {
