@@ -1,6 +1,6 @@
 -- Узлы (документы)
 CREATE TABLE IF NOT EXISTS nodes (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     type TEXT NOT NULL DEFAULT 'content',
     content TEXT NOT NULL,
     metadata JSON,
@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     valid_from TEXT,
     valid_until TEXT,
     version INTEGER DEFAULT 1,
-    supersedes TEXT
+    supersedes TEXT,
+    
+    PRIMARY KEY (id, version)
 );
 
 -- Связи между узлами
@@ -28,8 +30,8 @@ CREATE TABLE IF NOT EXISTS edges (
     temporal_weight REAL DEFAULT 1.0,
     
     PRIMARY KEY (from_node, to_node),
-    FOREIGN KEY (from_node) REFERENCES nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY (to_node) REFERENCES nodes(id) ON DELETE CASCADE
+    FOREIGN KEY (from_node) REFERENCES nodes(id, version) ON DELETE CASCADE,
+    FOREIGN KEY (to_node) REFERENCES nodes(id, version) ON DELETE CASCADE
 );
 
 -- Индексы для производительности

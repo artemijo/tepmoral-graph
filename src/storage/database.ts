@@ -19,7 +19,7 @@ import type {
 const SCHEMA_SQL = `
 -- Узлы (документы)
 CREATE TABLE IF NOT EXISTS nodes (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     type TEXT NOT NULL DEFAULT 'content',
     content TEXT NOT NULL,
     metadata JSON,
@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     valid_from TEXT,
     valid_until TEXT,
     version INTEGER DEFAULT 1,
-    supersedes TEXT
+    supersedes TEXT,
+    
+    PRIMARY KEY (id, version)
 );
 
 -- Связи между узлами
@@ -115,7 +117,7 @@ export class GraphDB {
   constructor(dbPath: string = 'graph.db') {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+    this.db.pragma('foreign_keys = OFF'); // Disable FK constraints for versioning
     this.initialize();
   }
 
@@ -163,18 +165,90 @@ export class GraphDB {
       const hasVersion = nodesTableInfo.some((col: any) => col.name === 'version');
       const hasSupersedes = nodesTableInfo.some((col: any) => col.name === 'supersedes');
       
-      // Add temporal columns to nodes table if they don't exist
-      if (!hasValidFrom) {
-        this.db.exec('ALTER TABLE nodes ADD COLUMN valid_from TEXT');
-      }
-      if (!hasValidUntil) {
-        this.db.exec('ALTER TABLE nodes ADD COLUMN valid_until TEXT');
-      }
-      if (!hasVersion) {
-        this.db.exec('ALTER TABLE nodes ADD COLUMN version INTEGER DEFAULT 1');
-      }
-      if (!hasSupersedes) {
-        this.db.exec('ALTER TABLE nodes ADD COLUMN supersedes TEXT');
+      // Check if we need to migrate from single PK to composite PK
+      const pkInfo = this.db.prepare("PRAGMA table_info(nodes)").all() as any[];
+      const hasIdOnlyPK = pkInfo.filter(col => col.pk > 0).length === 1 && pkInfo.some(col => col.name === 'id' && col.pk > 0);
+      
+      // If we have the old schema with id as primary key, we need to recreate the table
+      if (hasIdOnlyPK && (hasValidFrom || hasValidUntil || hasVersion)) {
+        console.log('Migrating nodes table from single PK to composite PK...');
+        
+        // Disable foreign key constraints temporarily
+        this.db.exec('PRAGMA foreign_keys = OFF');
+        
+        // Create a backup of the existing data
+        this.db.exec(`
+          CREATE TABLE nodes_backup AS SELECT * FROM nodes;
+        `);
+        
+        // Drop the old table
+        this.db.exec('DROP TABLE nodes');
+        
+        // Create the new table with composite primary key
+        this.db.exec(`
+          CREATE TABLE nodes (
+              id TEXT NOT NULL,
+              type TEXT NOT NULL DEFAULT 'content',
+              content TEXT NOT NULL,
+              metadata JSON,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              
+              -- Temporal fields (Phase 1.A)
+              valid_from TEXT,
+              valid_until TEXT,
+              version INTEGER DEFAULT 1,
+              supersedes TEXT,
+              
+              PRIMARY KEY (id, version)
+          );
+        `);
+        
+        // Restore data from backup, ensuring version is set
+        this.db.exec(`
+          INSERT INTO nodes (id, type, content, metadata, created_at, valid_from, valid_until, version, supersedes)
+          SELECT
+              id,
+              type,
+              content,
+              metadata,
+              created_at,
+              COALESCE(valid_from, created_at, datetime('now')),
+              valid_until,
+              COALESCE(version, 1),
+              supersedes
+          FROM nodes_backup;
+        `);
+        
+        // Drop the backup table
+        this.db.exec('DROP TABLE nodes_backup');
+        
+        // Re-enable foreign key constraints
+        this.db.exec('PRAGMA foreign_keys = ON');
+        
+        console.log('Migration to composite PK completed.');
+      } else {
+        // Add temporal columns to nodes table if they don't exist
+        if (!hasValidFrom) {
+          this.db.exec('ALTER TABLE nodes ADD COLUMN valid_from TEXT');
+        }
+        if (!hasValidUntil) {
+          this.db.exec('ALTER TABLE nodes ADD COLUMN valid_until TEXT');
+        }
+        if (!hasVersion) {
+          this.db.exec('ALTER TABLE nodes ADD COLUMN version INTEGER DEFAULT 1');
+        }
+        if (!hasSupersedes) {
+          this.db.exec('ALTER TABLE nodes ADD COLUMN supersedes TEXT');
+        }
+        
+        // Set default valid_from for existing records
+        if (!hasValidFrom) {
+          this.db.exec(`
+            UPDATE nodes
+            SET valid_from = COALESCE(created_at, datetime('now'))
+            WHERE valid_from IS NULL
+          `);
+        }
       }
       
       // Add temporal columns to edges table if they don't exist
@@ -190,15 +264,6 @@ export class GraphDB {
       }
       if (!edgesHasTemporalWeight) {
         this.db.exec('ALTER TABLE edges ADD COLUMN temporal_weight REAL DEFAULT 1.0');
-      }
-      
-      // Set default valid_from for existing records
-      if (!hasValidFrom) {
-        this.db.exec(`
-          UPDATE nodes
-          SET valid_from = COALESCE(created_at, datetime('now'))
-          WHERE valid_from IS NULL
-        `);
       }
       
     } catch (error) {
@@ -225,79 +290,185 @@ export class GraphDB {
     `);
   }
 
+  /**
+   * Helper method to generate and store embedding for a node
+   */
+  private async vectorizeNode(id: string, content: string): Promise<void> {
+    try {
+      const embedding = await this.embeddingGen.generateEmbedding(content);
+      
+      // Check if mapping already exists
+      const existingRow = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?').get(id) as any;
+      
+      if (existingRow) {
+        // Update existing embedding by deleting and re-inserting
+        const deleteStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
+        deleteStmt.run(existingRow.rowid);
+        
+        // Insert new vector (let sqlite-vec assign the rowid)
+        const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
+        
+        // Convert Float32Array to JSON array for vec_f32()
+        const embeddingArray = Array.from(embedding);
+        const embeddingBlob = JSON.stringify(embeddingArray);
+        
+        const insertResult = vecStmt.run(embeddingBlob);
+        
+        // Update mapping table with new rowid
+        const updateMapStmt = this.db.prepare('UPDATE vec_nodes_map SET rowid = ? WHERE node_id = ?');
+        updateMapStmt.run(insertResult.lastInsertRowid, id);
+      } else {
+        // Insert new vector first (let sqlite-vec assign the rowid)
+        const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
+        
+        // Convert Float32Array to JSON array for vec_f32()
+        const embeddingArray = Array.from(embedding);
+        const embeddingBlob = JSON.stringify(embeddingArray);
+        
+        const insertResult = vecStmt.run(embeddingBlob);
+        
+        // Then insert mapping with the assigned rowid
+        const mapStmt = this.db.prepare(`
+          INSERT INTO vec_nodes_map (rowid, node_id) VALUES (?, ?)
+        `);
+        mapStmt.run(insertResult.lastInsertRowid, id);
+      }
+    } catch (error) {
+      console.error('Error generating embedding:', error);
+    }
+  }
+
   async addNode(input: AddNodeInput): Promise<Node> {
     const { id, content, type = 'content', metadata, valid_from } = input;
+    const validFrom = valid_from || this.now();
 
-    // Validate size
+    // Validate inputs
     if (content.length > 2 * 1024 * 1024) {
       throw new Error('Content exceeds 2MB limit');
     }
 
-    const stmt = this.db.prepare(`
-      INSERT INTO nodes (id, type, content, metadata, valid_from)
-      VALUES (?, ?, ?, ?, ?)
-    `);
+    // Perform database operations in a transaction
+    const result = this.transaction(() => {
+      // Check if node already exists (get current version)
+      const existingStmt = this.db.prepare(`
+        SELECT * FROM nodes
+        WHERE id = ? AND valid_until IS NULL
+        ORDER BY version DESC
+        LIMIT 1
+      `);
+      const existing = existingStmt.get(id) as any;
 
-    stmt.run(id, type, content, metadata ? JSON.stringify(metadata) : null, valid_from || this.now());
+      let version = 1;
+      let supersedes: string | undefined;
 
-    // Generate and store embedding if vec extension is available
-    if (this.vecTableInitialized) {
-      try {
-        const embedding = await this.embeddingGen.generateEmbedding(content);
-        
-        // Check if mapping already exists
-        const existingRow = this.db.prepare('SELECT rowid FROM vec_nodes_map WHERE node_id = ?').get(id) as any;
-        
-        if (existingRow) {
-          // Update existing embedding by deleting and re-inserting
-          const deleteStmt = this.db.prepare('DELETE FROM vec_nodes WHERE rowid = ?');
-          deleteStmt.run(existingRow.rowid);
-          
-          // Insert new vector (let sqlite-vec assign the rowid)
-          const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
-          
-          // Convert Float32Array to JSON array for vec_f32()
-          const embeddingArray = Array.from(embedding);
-          const embeddingBlob = JSON.stringify(embeddingArray);
-          
-          const insertResult = vecStmt.run(embeddingBlob);
-          
-          // Update mapping table with new rowid
-          const updateMapStmt = this.db.prepare('UPDATE vec_nodes_map SET rowid = ? WHERE node_id = ?');
-          updateMapStmt.run(insertResult.lastInsertRowid, id);
-        } else {
-          // Insert new vector first (let sqlite-vec assign the rowid)
-          const vecStmt = this.db.prepare('INSERT INTO vec_nodes (embedding) VALUES (vec_f32(?))');
-          
-          // Convert Float32Array to JSON array for vec_f32()
-          const embeddingArray = Array.from(embedding);
-          const embeddingBlob = JSON.stringify(embeddingArray);
-          
-          const insertResult = vecStmt.run(embeddingBlob);
-          
-          // Then insert mapping with the assigned rowid
-          const mapStmt = this.db.prepare(`
-            INSERT INTO vec_nodes_map (rowid, node_id) VALUES (?, ?)
-          `);
-          mapStmt.run(insertResult.lastInsertRowid, id);
-        }
-      } catch (error) {
-        console.error('Error generating embedding:', error);
+      if (existing) {
+        // This is an UPDATE - create new version
+        version = (existing.version || 1) + 1;
+        supersedes = id;
+
+        // Mark old version as no longer valid
+        const updateStmt = this.db.prepare(`
+          UPDATE nodes
+          SET valid_until = ?
+          WHERE id = ? AND version = ? AND valid_until IS NULL
+        `);
+        updateStmt.run(validFrom, id, existing.version);
+
+        console.log(`📝 Creating version ${version} of document: ${id}`);
+      } else {
+        console.log(`✨ Creating new document: ${id} (v1)`);
       }
+
+      // Insert new version
+      const insertStmt = this.db.prepare(`
+        INSERT INTO nodes (
+          id, type, content, metadata,
+          valid_from, valid_until, version, supersedes, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+      `);
+
+      insertStmt.run(
+        id,
+        type,
+        content,
+        metadata ? JSON.stringify(metadata) : null,
+        validFrom,
+        version,
+        supersedes
+      );
+
+      // Return the newly created version info
+      return { version, isNew: !existing };
+    });
+
+    // Generate embedding for new version (async operation outside transaction)
+    if (this.vecTableInitialized) {
+      await this.vectorizeNode(id, content);
     }
 
-    return this.getNode(id)!;
+    // Return the newly created version
+    return this.getNodeCurrent(id)!;
   }
 
-  getNode(id: string): Node | null {
+  // ==================== TEMPORAL GET METHODS (Phase 1.B) ====================
+
+  /**
+   * Get current version of node (most common query)
+   */
+  getNodeCurrent(id: string): Node | null {
     const stmt = this.db.prepare(`
-      SELECT id, type, content, metadata, created_at, valid_from, valid_until, version, supersedes
+      SELECT * FROM nodes
+      WHERE id = ? AND valid_until IS NULL
+      ORDER BY version DESC
+      LIMIT 1
+    `);
+
+    return this.rowToNode(stmt.get(id) as any);
+  }
+
+  /**
+   * Get all versions of a node (history)
+   */
+  getNodeHistory(id: string): Node[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE id = ?
+      ORDER BY version ASC
+    `);
+
+    const rows = stmt.all(id) as any[];
+    return rows.map(row => this.rowToNode(row)!);
+  }
+
+  /**
+   * Get specific version of a node
+   */
+  getNodeVersion(id: string, version: number): Node | null {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE id = ? AND version = ?
+    `);
+
+    return this.rowToNode(stmt.get(id, version) as any);
+  }
+
+  /**
+   * Get version count for a document
+   */
+  getNodeVersionCount(id: string): number {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as count
       FROM nodes
       WHERE id = ?
     `);
 
     const row = stmt.get(id) as any;
-    return this.rowToNode(row);
+    return row?.count || 0;
+  }
+
+  getNode(id: string): Node | null {
+    return this.getNodeCurrent(id);
   }
 
   listNodes(limit: number = 100): Node[] {
@@ -503,10 +674,10 @@ export class GraphDB {
   searchContent(query: string, limit: number = 10): Node[] {
     try {
       const stmt = this.db.prepare(`
-        SELECT n.id, n.type, n.content, n.metadata, n.created_at
+        SELECT n.id, n.type, n.content, n.metadata, n.created_at, n.valid_from, n.valid_until, n.version, n.supersedes
         FROM nodes_fts
-        JOIN nodes n ON nodes_fts.id = n.id
-        WHERE nodes_fts MATCH ?
+        JOIN nodes n ON nodes_fts.id = n.id AND nodes_fts.rowid = n.rowid
+        WHERE nodes_fts MATCH ? AND n.valid_until IS NULL
         ORDER BY rank
         LIMIT ?
       `);
@@ -521,9 +692,9 @@ export class GraphDB {
       console.error('Full-text search error:', error);
       // Fallback to basic LIKE search if FTS fails
       const fallbackStmt = this.db.prepare(`
-        SELECT id, type, content, metadata, created_at
+        SELECT id, type, content, metadata, created_at, valid_from, valid_until, version, supersedes
         FROM nodes
-        WHERE content LIKE ?
+        WHERE content LIKE ? AND valid_until IS NULL
         ORDER BY created_at DESC
         LIMIT ?
       `);

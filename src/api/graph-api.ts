@@ -11,6 +11,8 @@ import type {
   Direction,
   SearchOptions,
   TagOperation,
+  TemporalOptions,
+  TimelineEntry,
 } from '../types/index.js';
 
 export class GraphAPI {
@@ -146,6 +148,29 @@ export class GraphAPI {
 
   rebuildSearchIndex(): void {
     this.db.rebuildSearchIndex();
+  }
+
+  // ==================== DOCUMENT VERSIONING (Phase 1.B) ====================
+
+  /**
+   * Get all versions/history of a document
+   */
+  getDocumentHistory(id: string): Node[] {
+    return this.db.getNodeHistory(id);
+  }
+
+  /**
+   * Get specific version of a document
+   */
+  getDocumentVersion(id: string, version: number): Node | null {
+    return this.db.getNodeVersion(id, version);
+  }
+
+  /**
+   * Get version count for a document
+   */
+  getDocumentVersionCount(id: string): number {
+    return this.db.getNodeVersionCount(id);
   }
 
   close(): void {
