@@ -24,11 +24,11 @@ export interface Node {
   metadata?: RichMetadata;  // ← Now using RichMetadata
   created_at?: string;
   
-  // Temporal fields (for Phase 1)
-  valid_from?: string;
-  valid_until?: string;
-  version?: number;
-  supersedes?: string;
+  // Temporal fields (Phase 1.A)
+  valid_from?: string;      // ISO 8601 timestamp
+  valid_until?: string;     // NULL = currently valid
+  version?: number;         // 1, 2, 3, ...
+  supersedes?: string;      // Previous version ID
 }
 
 export interface Edge {
@@ -38,6 +38,11 @@ export interface Edge {
   weight?: number;
   metadata?: Record<string, any>;
   created_at?: string;
+  
+  // Temporal fields (Phase 1.A)
+  valid_from?: string;
+  valid_until?: string;
+  temporal_weight?: number;
 }
 
 export interface SimilarityResult {
@@ -72,9 +77,23 @@ export interface AddNodeInput {
   type?: string;
   metadata?: RichMetadata;  // ← Now using RichMetadata
   
-  // Temporal fields (for Phase 1)
+  // Temporal fields (Phase 1.A)
   valid_from?: string;
-  version?: number;
+}
+
+// ADD new temporal types:
+export interface TemporalOptions {
+  at_time?: string;         // Query state at this time
+  include_deleted?: boolean; // Include deleted documents
+  all_versions?: boolean;   // Get all versions, not just current
+}
+
+export interface TimelineEntry {
+  timestamp: string;
+  event: 'created' | 'updated' | 'deleted';
+  version: number;
+  content_preview: string;
+  changes?: string[];
 }
 
 export interface AddEdgeInput {

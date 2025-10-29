@@ -23,7 +23,13 @@ CREATE TABLE IF NOT EXISTS nodes (
     type TEXT NOT NULL DEFAULT 'content',
     content TEXT NOT NULL,
     metadata JSON,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Temporal fields (Phase 1.A)
+    valid_from TEXT,
+    valid_until TEXT,
+    version INTEGER DEFAULT 1,
+    supersedes TEXT
 );
 
 -- Связи между узлами
@@ -34,6 +40,11 @@ CREATE TABLE IF NOT EXISTS edges (
     weight REAL DEFAULT 1.0,
     metadata JSON,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Temporal fields (Phase 1.A)
+    valid_from TEXT,
+    valid_until TEXT,
+    temporal_weight REAL DEFAULT 1.0,
     
     PRIMARY KEY (from_node, to_node),
     FOREIGN KEY (from_node) REFERENCES nodes(id) ON DELETE CASCADE,
@@ -52,6 +63,19 @@ CREATE INDEX IF NOT EXISTS idx_edges_created_at ON edges(created_at DESC);
 
 -- Metadata queries (optional but useful)
 CREATE INDEX IF NOT EXISTS idx_edges_relation_weight ON edges(relation, weight);
+
+-- ==================== TEMPORAL EXTENSIONS ====================
+-- Phase 1.A: Adding temporal support to existing tables
+
+-- Temporal indexes for nodes
+CREATE INDEX IF NOT EXISTS idx_nodes_valid_from ON nodes(valid_from);
+CREATE INDEX IF NOT EXISTS idx_nodes_valid_until ON nodes(valid_until);
+CREATE INDEX IF NOT EXISTS idx_nodes_version ON nodes(id, version);
+CREATE INDEX IF NOT EXISTS idx_nodes_supersedes ON nodes(supersedes);
+
+-- Temporal indexes for edges
+CREATE INDEX IF NOT EXISTS idx_edges_valid_from ON edges(valid_from);
+CREATE INDEX IF NOT EXISTS idx_edges_valid_until ON edges(valid_until);
 
 -- Полнотекстовый поиск
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
@@ -74,6 +98,13 @@ CREATE TRIGGER IF NOT EXISTS nodes_fts_update AFTER UPDATE ON nodes BEGIN
     DELETE FROM nodes_fts WHERE rowid = old.rowid;
     INSERT INTO nodes_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
 END;
+
+-- Convenience views for current state (no history)
+CREATE VIEW IF NOT EXISTS current_nodes AS
+SELECT * FROM nodes WHERE valid_until IS NULL;
+
+CREATE VIEW IF NOT EXISTS current_edges AS
+SELECT * FROM edges WHERE valid_until IS NULL;
 `;
 
 export class GraphDB {
@@ -89,7 +120,10 @@ export class GraphDB {
   }
 
   private initialize(): void {
-    // Execute schema
+    // Handle migration for existing databases FIRST (Phase 1.A)
+    this.migrateToTemporalSchema();
+
+    // Execute schema (will create missing tables/indexes)
     this.db.exec(SCHEMA_SQL);
 
     // Try to load sqlite-vec extension using npm package
@@ -102,6 +136,73 @@ export class GraphDB {
       console.warn('⚠️ sqlite-vec extension not available:', error instanceof Error ? error.message : String(error));
       console.warn('Install from: https://github.com/asg017/sqlite-vec');
       this.vecTableInitialized = false;
+    }
+  }
+
+  /**
+   * Migrate existing database to temporal schema (Phase 1.A)
+   */
+  private migrateToTemporalSchema(): void {
+    try {
+      // Check if tables exist first
+      const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[];
+      const hasNodesTable = tables.some((t: any) => t.name === 'nodes');
+      const hasEdgesTable = tables.some((t: any) => t.name === 'edges');
+      
+      if (!hasNodesTable || !hasEdgesTable) {
+        // Tables don't exist yet, will be created by schema
+        return;
+      }
+      
+      // Check if temporal columns already exist
+      const nodesTableInfo = this.db.prepare("PRAGMA table_info(nodes)").all() as any[];
+      const edgesTableInfo = this.db.prepare("PRAGMA table_info(edges)").all() as any[];
+      
+      const hasValidFrom = nodesTableInfo.some((col: any) => col.name === 'valid_from');
+      const hasValidUntil = nodesTableInfo.some((col: any) => col.name === 'valid_until');
+      const hasVersion = nodesTableInfo.some((col: any) => col.name === 'version');
+      const hasSupersedes = nodesTableInfo.some((col: any) => col.name === 'supersedes');
+      
+      // Add temporal columns to nodes table if they don't exist
+      if (!hasValidFrom) {
+        this.db.exec('ALTER TABLE nodes ADD COLUMN valid_from TEXT');
+      }
+      if (!hasValidUntil) {
+        this.db.exec('ALTER TABLE nodes ADD COLUMN valid_until TEXT');
+      }
+      if (!hasVersion) {
+        this.db.exec('ALTER TABLE nodes ADD COLUMN version INTEGER DEFAULT 1');
+      }
+      if (!hasSupersedes) {
+        this.db.exec('ALTER TABLE nodes ADD COLUMN supersedes TEXT');
+      }
+      
+      // Add temporal columns to edges table if they don't exist
+      const edgesHasValidFrom = edgesTableInfo.some((col: any) => col.name === 'valid_from');
+      const edgesHasValidUntil = edgesTableInfo.some((col: any) => col.name === 'valid_until');
+      const edgesHasTemporalWeight = edgesTableInfo.some((col: any) => col.name === 'temporal_weight');
+      
+      if (!edgesHasValidFrom) {
+        this.db.exec('ALTER TABLE edges ADD COLUMN valid_from TEXT');
+      }
+      if (!edgesHasValidUntil) {
+        this.db.exec('ALTER TABLE edges ADD COLUMN valid_until TEXT');
+      }
+      if (!edgesHasTemporalWeight) {
+        this.db.exec('ALTER TABLE edges ADD COLUMN temporal_weight REAL DEFAULT 1.0');
+      }
+      
+      // Set default valid_from for existing records
+      if (!hasValidFrom) {
+        this.db.exec(`
+          UPDATE nodes
+          SET valid_from = COALESCE(created_at, datetime('now'))
+          WHERE valid_from IS NULL
+        `);
+      }
+      
+    } catch (error) {
+      console.warn('Migration warning:', error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -125,7 +226,7 @@ export class GraphDB {
   }
 
   async addNode(input: AddNodeInput): Promise<Node> {
-    const { id, content, type = 'content', metadata } = input;
+    const { id, content, type = 'content', metadata, valid_from } = input;
 
     // Validate size
     if (content.length > 2 * 1024 * 1024) {
@@ -133,11 +234,11 @@ export class GraphDB {
     }
 
     const stmt = this.db.prepare(`
-      INSERT INTO nodes (id, type, content, metadata)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO nodes (id, type, content, metadata, valid_from)
+      VALUES (?, ?, ?, ?, ?)
     `);
 
-    stmt.run(id, type, content, metadata ? JSON.stringify(metadata) : null);
+    stmt.run(id, type, content, metadata ? JSON.stringify(metadata) : null, valid_from || this.now());
 
     // Generate and store embedding if vec extension is available
     if (this.vecTableInitialized) {
@@ -190,7 +291,7 @@ export class GraphDB {
 
   getNode(id: string): Node | null {
     const stmt = this.db.prepare(`
-      SELECT id, type, content, metadata, created_at
+      SELECT id, type, content, metadata, created_at, valid_from, valid_until, version, supersedes
       FROM nodes
       WHERE id = ?
     `);
@@ -201,7 +302,7 @@ export class GraphDB {
 
   listNodes(limit: number = 100): Node[] {
     const stmt = this.db.prepare(`
-      SELECT id, type, content, metadata, created_at
+      SELECT id, type, content, metadata, created_at, valid_from, valid_until, version, supersedes
       FROM nodes
       ORDER BY created_at DESC
       LIMIT ?
@@ -734,7 +835,48 @@ export class GraphDB {
       content: row.content,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       created_at: row.created_at,
+      valid_from: row.valid_from,
+      valid_until: row.valid_until || undefined, // Convert null to undefined
+      version: row.version,
+      supersedes: row.supersedes || undefined, // Convert null to undefined
     };
+  }
+
+  // ==================== TEMPORAL HELPERS (Phase 1.A) ====================
+
+  /**
+   * Check if a timestamp is valid at a given time
+   */
+  private isValidAtTime(
+    validFrom: string | null | undefined,
+    validUntil: string | null | undefined,
+    timestamp: string
+  ): boolean {
+    if (!validFrom) return false;
+    
+    const isAfterStart = validFrom <= timestamp;
+    const isBeforeEnd = !validUntil || validUntil > timestamp;
+    
+    return isAfterStart && isBeforeEnd;
+  }
+
+  /**
+   * Generate ISO timestamp for 'now'
+   */
+  private now(): string {
+    return new Date().toISOString();
+  }
+
+  /**
+   * Validate ISO timestamp format
+   */
+  private isValidTimestamp(timestamp: string): boolean {
+    try {
+      const date = new Date(timestamp);
+      return date.toISOString() === timestamp;
+    } catch {
+      return false;
+    }
   }
 
   /**
