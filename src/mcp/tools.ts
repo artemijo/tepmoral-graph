@@ -9,6 +9,9 @@ export const AddDocumentSchema = z.object({
 
 export const GetDocumentSchema = z.object({
   id: z.string().describe('Document identifier'),
+  at_time: z.string()
+    .optional()
+    .describe('ISO timestamp - read documents as they existed at this time (temporal query)'),
 });
 
 export const ListDocumentsSchema = z.object({
@@ -28,8 +31,16 @@ export const AddRelationshipSchema = z.object({
 
 export const GetNeighborsSchema = z.object({
   id: z.string().describe('Document ID'),
+  depth: z.number()
+    .int()
+    .positive()
+    .default(1)
+    .describe('Relationship depth to traverse (1 = immediate neighbors)'),
   direction: z.enum(['incoming', 'outgoing', 'both']).optional().default('both')
     .describe('Direction of relationships to retrieve'),
+  at_time: z.string()
+    .optional()
+    .describe('ISO timestamp - open document as it existed at this time'),
 });
 
 export const FindPathSchema = z.object({
@@ -52,10 +63,14 @@ export const SearchSchema = z.object({
     emoji: z.string().optional().describe('Filter by emoji'),
     type: z.string().optional().describe('Filter by document type'),
     author: z.string().optional().describe('Filter by author'),
+    created_after: z.string().optional().describe('ISO timestamp - only docs created after'),
   }).optional().describe('Filter by metadata fields'),
   limit: z.number().optional().describe('Maximum results (default: 10)'),
   sort_by: z.enum(['created_at', 'id']).optional().describe('Sort field (default: created_at)'),
   sort_order: z.enum(['asc', 'desc']).optional().describe('Sort order (default: desc)'),
+  at_time: z.string()
+    .optional()
+    .describe('ISO timestamp - search documents as they existed at this time'),
 });
 
 export const TagOperationSchema = z.object({
@@ -96,6 +111,34 @@ export const GetTimeRangeSchema = z.object({
   start: z.string().describe('Start date (ISO 8601 format)'),
   end: z.string().describe('End date (ISO 8601 format)'),
 });
+
+export const GraphExploreSchema = z.object({
+  start: z.string().describe('Starting node ID to explore from'),
+  strategy: z.enum(['breadth', 'depth', 'relationship'])
+    .default('breadth')
+    .describe('Exploration strategy: breadth (BFS), depth (DFS), or relationship-based'),
+  max_depth: z.number()
+    .int()
+    .positive()
+    .default(3)
+    .describe('Maximum depth to explore (number of hops from start)'),
+  max_nodes: z.number()
+    .int()
+    .positive()
+    .default(50)
+    .describe('Maximum number of nodes to return'),
+  follow_relations: z.array(z.string())
+    .optional()
+    .describe('Only follow edges with these relationship types (e.g., ["references", "cites"])'),
+  filters: z.object({
+    tags: z.array(z.string()).optional().describe('Only include nodes with ALL these tags'),
+    type: z.string().optional().describe('Only include nodes of this type')
+  }).optional().describe('Filters to apply to discovered nodes'),
+  at_time: z.string()
+    .optional()
+    .describe('ISO timestamp - explore graph as it existed at this time')
+});
+
 
 export const MapGraphSchema = z.object({
   scope: z.enum(['all', 'filtered', 'subgraph', 'temporal_slice']).optional().default('all').describe('Map scope: all nodes, filtered, subgraph around focus nodes, or temporal snapshot'),
@@ -186,11 +229,25 @@ export const tools = [
   
   {
     name: 'graph_get_document',
-    description: 'Get document by ID with all metadata',
+    description: `Read one or more documents by their IDs.
+  
+Use this tool to:
+- Retrieve full content and metadata for specific documents
+- Access document versions at specific points in time (with at_time)
+- Get current state of documents (without at_time)
+
+Returns: Array of documents with full content, metadata, relationships, and version info.
+
+Temporal queries: Use at_time to see documents as they existed in the past.
+Example: Read "contract_v1" as it existed on 2024-01-15`,
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Document ID' }
+        id: { type: 'string', description: 'Document ID' },
+        at_time: {
+          type: 'string',
+          description: 'ISO timestamp - read documents as they existed at this time (temporal query)'
+        }
       },
       required: ['id']
     }
@@ -198,7 +255,18 @@ export const tools = [
   
   {
     name: 'graph_search',
-    description: 'Smart search: full-text search with metadata filtering (tags, path, emoji, keywords, type)',
+    description: `Search for documents using text queries and metadata filters.
+  
+Use this tool to:
+- Find documents by content keywords
+- Filter by tags, type, path, or creation date
+- Search historical document state (with at_time)
+- Discover documents matching complex criteria
+
+Returns: Array of matching documents with relevance scores.
+
+Temporal searches: Use at_time to search documents as they existed in the past.
+Example: Find all documents tagged "urgent" as of 2024-02-01`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -236,6 +304,10 @@ export const tools = [
             author: {
               type: 'string',
               description: 'Filter by author'
+            },
+            created_after: {
+              type: 'string',
+              description: 'ISO timestamp - only docs created after'
             }
           }
         },
@@ -252,6 +324,10 @@ export const tools = [
           type: 'string',
           enum: ['asc', 'desc'],
           description: 'Sort order (default: desc)'
+        },
+        at_time: {
+          type: 'string',
+          description: 'ISO timestamp - search documents as they existed at this time'
         }
       }
     }
@@ -353,15 +429,36 @@ export const tools = [
   
   {
     name: 'graph_get_neighbors',
-    description: 'Get neighboring documents connected by relationships',
+    description: `Open a document and explore its immediate relationships.
+  
+Use this tool to:
+- Get a document with its connected neighbors
+- See what documents are linked (incoming and outgoing)
+- Explore document context with configurable depth
+- View historical relationships (with at_time)
+
+Returns: The document plus its neighbors within specified depth.
+
+Temporal queries: Use at_time to see relationships as they existed in the past.
+Example: Open "project_plan" with its relationships as of 2024-03-01`,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Document ID' },
+        depth: {
+          type: 'number',
+          description: 'Relationship depth to traverse (1 = immediate neighbors)',
+          default: 1
+        },
         direction: {
           type: 'string',
           enum: ['incoming', 'outgoing', 'both'],
-          description: 'Direction of relationships (default: both)'
+          description: 'Direction of relationships (default: both)',
+          default: 'both'
+        },
+        at_time: {
+          type: 'string',
+          description: 'ISO timestamp - open document as it existed at this time'
         }
       },
       required: ['id']
@@ -612,6 +709,76 @@ export const tools = [
           default: 'json'
         }
       }
+    }
+  },
+  
+  {
+    name: 'graph_explore',
+    description: `Explore the graph from a starting node using breadth-first search (BFS).
+  
+Use this tool to:
+- Navigate relationships from any document
+- Discover connected documents within N hops
+- Find documents related to a specific node
+- Map local neighborhoods in the graph
+- Explore historical graph structure (with at_time)
+
+The tool returns all discovered nodes with their depth from the start, plus the edges between them.
+
+Examples:
+- Explore 2 hops from "contract_v1" to find related documents
+- Find all documents tagged "urgent" within 3 hops of "project_plan"
+- Explore only "references" relationships to map citation network
+- See what was connected to a document on a specific date`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: {
+          type: 'string',
+          description: 'Starting node ID to explore from'
+        },
+        strategy: {
+          type: 'string',
+          enum: ['breadth', 'depth', 'relationship'],
+          description: 'Exploration strategy: breadth (BFS), depth (DFS), or relationship-based',
+          default: 'breadth'
+        },
+        max_depth: {
+          type: 'number',
+          description: 'Maximum depth to explore (number of hops from start)',
+          default: 3
+        },
+        max_nodes: {
+          type: 'number',
+          description: 'Maximum number of nodes to return',
+          default: 50
+        },
+        follow_relations: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only follow edges with these relationship types (e.g., ["references", "cites"])'
+        },
+        filters: {
+          type: 'object',
+          description: 'Filters to apply to discovered nodes',
+          properties: {
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Only include nodes with ALL these tags'
+            },
+            type: {
+              type: 'string',
+              description: 'Only include nodes of this type'
+            }
+          }
+        },
+        at_time: {
+          type: 'string',
+          description: 'ISO timestamp - explore graph as it existed at this time'
+        }
+      },
+      required: ['start']
     }
   },
   

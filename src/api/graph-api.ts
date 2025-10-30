@@ -37,6 +37,12 @@ export class GraphAPI {
     return this.db.searchDocuments(options);
   }
 
+  searchDocuments(options: SearchOptions, temporal?: { at_time?: string }): Node[] {
+    // For now, ignore temporal parameter
+    // TODO: Implement proper temporal search
+    return this.db.searchDocuments(options);
+  }
+
   /**
    * List documents grouped by path
    */
@@ -98,6 +104,10 @@ export class GraphAPI {
 
   getDocument(id: string): Node | null {
     return this.db.getNode(id);
+  }
+
+  getDocumentAtTime(id: string, timestamp: string): Node | null {
+    return this.db.getNodeAtTime(id, timestamp);
   }
 
   listDocuments(limit?: number): Node[] {

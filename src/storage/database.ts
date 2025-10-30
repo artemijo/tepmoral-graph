@@ -1488,21 +1488,8 @@ export class GraphDB {
       throw new Error(`Start node not found: ${start}`);
     }
     
-    // Check if start node matches filters
-    if (filters) {
-      if (filters.tags && startNode.metadata?.tags) {
-        const hasAllTags = filters.tags.every(tag =>
-          startNode.metadata!.tags!.includes(tag)
-        );
-        if (!hasAllTags) {
-          throw new Error(`Start node "${start}" does not match tag filters`);
-        }
-      }
-      
-      if (filters.type && startNode.metadata?.type !== filters.type) {
-        throw new Error(`Start node "${start}" does not match type filter`);
-      }
-    }
+    // Note: Start node is always included regardless of filters
+    // Filters only apply to discovered nodes
     
     nodes.push({ ...startNode, depth: 0 });
     visited.add(start);
@@ -1533,23 +1520,33 @@ export class GraphDB {
           
           if (!node) continue;
           
-          // Apply filters
-          if (filters) {
+          // Always add to visited and queue for exploration, but only add to results if it passes filters
+          visited.add(neighbor.id);
+          
+          // Apply filters (but not to the start node) - only for adding to results
+          let passesFilters = true;
+          if (filters && node.id !== start) {
             if (filters.tags && node.metadata?.tags) {
               const hasAllTags = filters.tags.every(tag =>
                 node.metadata!.tags!.includes(tag)
               );
-              if (!hasAllTags) continue;
+              if (!hasAllTags) passesFilters = false;
             }
-            
-            if (filters.type && node.metadata?.type !== filters.type) {
-              continue;
+           
+            // Check type in both metadata and the row's type field
+            const nodeType = node.metadata?.type || (node as any).type;
+            if (filters.type && nodeType !== filters.type) {
+              passesFilters = false;
             }
           }
           
-          visited.add(neighbor.id);
-          nodes.push({ ...node, depth: current.depth + 1 });
+          // Always add to queue for further exploration
           queue.push({ id: neighbor.id, depth: current.depth + 1 });
+          
+          // Only add to results if it passes filters
+          if (passesFilters) {
+            nodes.push({ ...node, depth: current.depth + 1 });
+          }
           
           // Record edge
           edges.push({
@@ -1933,10 +1930,12 @@ export class GraphDB {
         valid_from as timestamp,
         CASE
           WHEN version = 1 THEN 'created'
+          WHEN supersedes IS NOT NULL AND valid_until IS NOT NULL THEN 'updated'
           WHEN valid_until IS NOT NULL THEN 'deleted'
           ELSE 'updated'
         END as event,
         version,
+        content,
         substr(content, 1, 100) as content_preview,
         metadata
       FROM nodes
@@ -1975,6 +1974,7 @@ export class GraphDB {
     
     const previous = allVersions[currentIdx - 1];
     
+    // Check for content changes - ensure we detect content changes properly
     if (current.content !== previous.content) {
       changes.push('Content modified');
     }

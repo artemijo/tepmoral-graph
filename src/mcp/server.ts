@@ -94,6 +94,9 @@ export class TemporalGraphServer {
           case 'graph_stats':  // ← UPDATED
             return this.handleStats();
             
+          case 'graph_explore':  // ← NEW
+            return this.handleGraphExplore(args);
+            
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -135,17 +138,25 @@ export class TemporalGraphServer {
   }
 
   private handleGetDocument(args: any) {
-    const node = this.api.getDocument(args.id);
+    const { id, at_time } = args;
+    const node = at_time
+      ? this.api.getDocumentAtTime(id, at_time)
+      : this.api.getDocument(id);
     
     if (!node) {
-      throw new Error(`Document not found: ${args.id}`);
+      throw new Error(`Document not found: ${id}`);
     }
     
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(node, null, 2),
+          text: JSON.stringify({
+            success: true,
+            count: 1,
+            documents: [node],
+            ...(at_time && { _queried_at: at_time })
+          }, null, 2),
         },
       ],
     };
@@ -234,17 +245,49 @@ export class TemporalGraphServer {
   }
 
   private handleGetNeighbors(args: any) {
-    const neighbors = this.api.getNeighbors(args.id, args.direction);
+    const { id, depth = 1, direction = 'both', at_time } = args;
+    
+    const node = at_time
+      ? this.api.getDocumentAtTime(id, at_time)
+      : this.api.getDocument(id);
+    
+    if (!node) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: false,
+              error: `Document not found: ${id}`
+            }, null, 2)
+          }
+        ],
+        isError: true
+      };
+    }
+    
+    const neighbors = this.api.getNeighbors(id, direction, {
+      depth,
+      at_time
+    });
     
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify({
-            node: args.id,
-            direction: args.direction || 'both',
-            count: neighbors.length,
-            neighbors,
+            success: true,
+            node: {
+              ...node,
+              ...(at_time && { _queried_at: at_time })
+            },
+            neighbors: neighbors.map((n: any) => ({
+              id: n.id,
+              relation: n.relation,
+              direction: n.direction,
+              depth: n.depth
+            })),
+            total_neighbors: neighbors.length
           }, null, 2),
         },
       ],
@@ -305,23 +348,26 @@ export class TemporalGraphServer {
   }
 
   private handleSearch(args: any) {
-    const results = this.api.search({
-      query: args.query,
-      filters: args.filters,
-      limit: args.limit,
-      sort_by: args.sort_by,
-      sort_order: args.sort_order
-    });
+    const { query, filters, limit, sort_by, sort_order, at_time } = args;
+    
+    const results = this.api.searchDocuments(
+      { query, filters, limit, sort_by, sort_order },
+      { at_time }
+    );
     
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify({
-            query: args.query,
-            filters: args.filters,
+            success: true,
+            query,
+            filters,
             count: results.length,
-            results
+            results: results.map(r => ({
+              ...r,
+              ...(at_time && { _queried_at: at_time })
+            }))
           }, null, 2)
         }
       ]
@@ -665,6 +711,53 @@ export class TemporalGraphServer {
           },
         ],
         isError: true,
+      };
+    }
+  }
+  
+  private handleGraphExplore(args: any) {
+    const params = {
+      start: args.start,
+      strategy: args.strategy || 'breadth',
+      max_depth: args.max_depth || 3,
+      max_nodes: args.max_nodes || 50,
+      follow_relations: args.follow_relations,
+      filters: args.filters,
+      at_time: args.at_time
+    };
+    
+    try {
+      const result = this.api.exploreGraph(params);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            root: result.root,
+            strategy: result.strategy,
+            nodes: result.nodes.map((n: any) => ({
+              id: n.id,
+              depth: n.depth,
+              type: n.metadata?.type,
+              tags: n.metadata?.tags,
+              version: n.version
+            })),
+            edges: result.edges,
+            stats: result.stats
+          }, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: false,
+            error: error.message
+          }, null, 2)
+        }],
+        isError: true
       };
     }
   }

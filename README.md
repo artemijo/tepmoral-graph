@@ -1,17 +1,34 @@
-# Temporal Graph MCP v0.1
+# Temporal Graph MCP v2.0.0
 
 MCP-сервер для работы с графом документов с поддержкой семантического поиска через векторные эмбеддинги.
 
 ## ✨ Возможности
 
-- 📝 **Управление документами** - добавление, получение, список, удаление
-- 🔗 **Граф связей** - направленные связи между документами
-- 🧭 **Навигация** - поиск соседей и путей в графе
-- 🎯 **Семантический поиск** - поиск похожих документов через векторные эмбеддинги
-- 🔍 **Полнотекстовый поиск** - FTS5 для быстрого поиска по содержимому
-- 📊 **Статистика** - метрики графа и экспорт данных
-- 🎨 **Rich Metadata System** - богатые метаданные с тегами, путями, эмодзи, ключевыми словами, словарем и картой документа
-- 🏷️ **Universal Tag Tool** - один инструмент для всех операций с тегами
+### Complete MCP Tool Suite (14 Tools)
+- **Document Operations** (4): create, read, update, delete with versioning
+- **Search & Discovery** (2): full-text search and graph exploration
+- **Relationships** (1): create typed edges with causality validation
+- **Navigation** (2): open nodes with neighbors, comprehensive graph mapping
+- **History & Analysis** (5): timelines, version comparison, time-based queries
+
+### Temporal Capabilities
+- **Time Travel**: Query any document/graph state at any point in history
+- **Version Control**: Automatic versioning with change tracking
+- **Temporal Relationships**: Edges with validity periods
+- **Causality Protection**: Prevents impossible temporal states
+
+### Graph Features
+- **BFS Exploration**: Navigate relationships with configurable depth
+- **Smart Filtering**: Filter by tags, type, relationships, time ranges
+- **Multiple Map Scopes**: all, filtered, subgraph, temporal_slice
+- **Dual Formats**: JSON (structured data) and Mermaid (visualization)
+- **Rich Statistics**: Type distribution, relationship analysis, tag usage
+
+### Quality of Life
+- **Metadata Merging**: Smart metadata updates preserve existing fields
+- **Change Detection**: Automatic tracking of content and metadata changes
+- **Soft Deletes**: Preserve history when deleting documents
+- **Content Previews**: Truncated content for quick scanning
 
 ## 🚀 Быстрый старт
 
@@ -80,16 +97,27 @@ graph.close();
 
 | Инструмент | Описание |
 |-----------|----------|
+| **Document Operations** |
 | `graph_add_document` | Добавить документ с автоматической векторизацией |
-| `graph_get_document` | Получить документ по ID |
-| `graph_list_documents` | Список всех документов |
+| `graph_get_document` | Получить документ по ID (с временной поддержкой) |
+| `graph_update_document` | Обновить документ (создает новую версию) |
 | `graph_delete_document` | Удалить документ и связи |
-| `graph_add_relationship` | Добавить связь между документами |
-| `graph_get_neighbors` | Получить соседние документы |
-| `graph_find_path` | Найти кратчайший путь |
-| `graph_find_similar` | Семантический поиск похожих |
-| `graph_search_content` | Полнотекстовый поиск |
-| `graph_get_stats` | Статистика графа |
+| **Search & Discovery** |
+| `graph_search` | Полнотекстовый поиск с фильтрами метаданных |
+| `graph_explore` | Исследовать граф с помощью BFS |
+| **Relationships** |
+| `create_relations` | Создать связи между документами |
+| **Navigation** |
+| `open_nodes` | Открыть документ с соседями (с временной поддержкой) |
+| `graph_map` | Генерировать комплексную карту графа |
+| **History & Analysis** |
+| `graph_get_document_timeline` | Получить историю изменений документа |
+| `graph_compare_versions` | Сравнить две версии документа |
+| `graph_get_created_between` | Получить документы, созданные в диапазоне |
+| `graph_get_modified_between` | Получить документы, измененные в диапазоне |
+| `graph_get_deleted_between` | Получить документы, удаленные в диапазоне |
+
+**Всего инструментов: 14**
 
 ## 🔧 Технологии
 
@@ -201,22 +229,77 @@ const similar = await graph.findSimilar('idea_1', 10);
 - Нет кэширования эмбеддингов
 - Нет временных меток и валидации причинности
 
-## 🚧 Будущие версии
+## 📚 Documentation
 
-### v0.2 - Временные Графы
-- Добавить timestamps к узлам
-- Валидация temporal causality
-- getFutureNodes() / getPastNodes()
+For complete tool documentation with examples, see [MCP_TOOLS_REFERENCE.md](docs/MCP_TOOLS_REFERENCE.md)
 
-### v0.3 - Оптимизация
-- Кэширование эмбеддингов
-- Пакетная обработка
-- Асинхронный API
+## 🎯 Quick Tool Reference
 
-### v0.4+ - Расширения
-- Множественные графы
-- REST API
-- Визуализация
+**Document Operations:**
+1. `graph_add_document` - Create documents
+2. `graph_get_document` - Read by ID (with temporal support)
+3. `graph_update_document` - Update with versioning
+4. `graph_delete_document` - Soft delete
+
+**Search & Discovery:**
+5. `graph_search` - Full-text + filters (with temporal)
+6. `graph_explore` - BFS exploration
+
+**Relationships:**
+7. `create_relations` - Create edges
+
+**Navigation:**
+8. `open_nodes` - Open with neighbors (with temporal)
+9. `graph_map` - Comprehensive mapping
+
+**History & Analysis:**
+10. `graph_get_document_timeline` - Change history
+11. `graph_compare_versions` - Version diff
+12. `graph_get_created_between` - Created in range
+13. `graph_get_modified_between` - Modified in range
+14. `graph_get_deleted_between` - Deleted in range
+
+## 🔧 Технологии
+
+- **Runtime**: Node.js 20+
+- **Language**: TypeScript 5+
+- **Database**: SQLite (better-sqlite3)
+- **Vectors**: sqlite-vec extension (опционально)
+- **Embeddings**: @xenova/transformers (all-MiniLM-L6-v2)
+- **MCP**: @modelcontextprotocol/sdk
+- **Testing**: vitest
+
+## 🧪 Тестирование
+
+```bash
+# Запустить тесты
+npm test
+
+# Один раз
+npm run test:once
+```
+
+## 📁 Структура проекта
+
+```
+temporal-graph/
+├── src/
+│   ├── index.ts              # Точка входа MCP сервера
+│   ├── storage/
+│   │   ├── database.ts       # Основной класс GraphDB
+│   │   ├── embeddings.ts     # Генерация векторов
+│   │   └── schema.sql        # SQL схема
+│   ├── api/
+│   │   └── graph-api.ts      # API обертка
+│   ├── mcp/
+│   │   ├── server.ts         # MCP сервер
+│   │   └── tools.ts          # Определения инструментов
+│   └── types/
+│       └── index.ts          # TypeScript типы
+├── tests/                    # Unit-тесты
+├── docs/                     # Documentation
+└── examples/                 # Примеры использования
+```
 
 ## 📝 Лицензия
 
